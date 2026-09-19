@@ -197,7 +197,7 @@ public class WearLink {
         // apiCode 27 = sendAppConfirm, field3 -> field32{ field1: appSign, field2: enc }
         byte[] appSign = Crypto.hmac(keys.appKey, Crypto.concat(randomApp, randomDevice));
         byte[] plain = buildAppInfo();
-        byte[] nonce = Crypto.concat(keys.appIv, new byte[12]);
+        byte[] nonce = Crypto.concat(keys.appIv, new byte[8]);   // 4+8 = 12B
         byte[] enc = Crypto.ccm(true, keys.appKey, nonce, plain, 32);
         if (enc == null) throw new IllegalStateException("AES-GCM 加密失败");
         byte[] f32 = Crypto.concat(new byte[]{(byte) 0x82, 0x02, (byte) (2 + appSign.length + 2 + enc.length)},
@@ -240,7 +240,7 @@ public class WearLink {
     /** 加密会话数据（op=WRITE_ENC） */
     public void sendEncrypted(byte channel, byte[] plain) throws Exception {
         if (keys == null) throw new IllegalStateException("未认证");
-        byte[] nonce = Crypto.concat(keys.appIv, new byte[12]);
+        byte[] nonce = Crypto.concat(keys.appIv, new byte[8]);   // 4+8 = 12B
         byte[] enc = Crypto.ccm(true, keys.appKey, nonce, plain, 32);
         sendData(channel, Framing.OP_WRITE_ENC, enc);
     }
