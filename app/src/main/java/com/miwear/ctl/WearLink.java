@@ -262,24 +262,33 @@ public class WearLink {
     public void pushNotification(String pkg, String title, String text, String appName, int id) throws Exception {
         if (keys == null) throw new IllegalStateException("未认证");
 
+        // 字段表逆向自 BaseNotifySyncService.handleNotificationPosted（权威）
+        String key = "0|" + pkg + "|" + id + "|null|1000";
+        String time = new java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US)
+                          .format(new java.util.Date());
+
         ByteArrayOutputStream lli = new ByteArrayOutputStream();
-        PB.str(lli, 1, pkg == null ? "" : pkg);
-        PB.str(lli, 2, title == null ? "" : title);
-        PB.str(lli, 3, text == null ? "" : text);
-        PB.str(lli, 4, appName == null ? "" : appName);
-        lli.write(0x38); PB.varint(lli, id);
-        PB.str(lli, 12, (pkg == null ? "" : pkg) + "|" + id);
+        PB.str(lli, 1, pkg);                      // f1  包名
+        PB.str(lli, 2, appName);                  // f2  应用名
+        PB.str(lli, 3, title);                    // f3  标题
+        PB.str(lli, 4, "");                       // f4
+        PB.str(lli, 5, text);                     // f5  内容
+        PB.str(lli, 6, time);                     // f6  时间
+        lli.write(0x38); PB.varint(lli, id);      // f7  id
+        PB.str(lli, 9, "");                       // f9  appGroup
+        PB.str(lli, 12, key);                     // f12 key
+        lli.write((byte) 0x80); lli.write(0x01); lli.write(0x01);   // f16 = true
 
         ByteArrayOutputStream llie = new ByteArrayOutputStream();
-        PB.bytes(llie, 1, lli.toByteArray());
+        PB.bytes(llie, 1, lli.toByteArray());     // lli.e.f1 repeated
 
         ByteArrayOutputStream kli = new ByteArrayOutputStream();
-        PB.bytes(kli, 3, llie.toByteArray());
+        PB.bytes(kli, 3, llie.toByteArray());     // kli.f3
 
         ByteArrayOutputStream oyt = new ByteArrayOutputStream();
-        oyt.write(0x08); PB.varint(oyt, 7);
-        oyt.write(0x10); PB.varint(oyt, 0);
-        PB.bytes(oyt, 9, kli.toByteArray());
+        oyt.write(0x08); PB.varint(oyt, 7);       // f1 模块=通知
+        oyt.write(0x10); PB.varint(oyt, 0);       // f2 子命令=添加
+        PB.bytes(oyt, 9, kli.toByteArray());      // f9
 
         log.log("通知 oyt = " + Crypto.hex(oyt.toByteArray()));
         sendEncrypted(Framing.CH_PB, oyt.toByteArray());
