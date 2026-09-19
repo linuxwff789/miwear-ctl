@@ -88,17 +88,18 @@ public class MainActivity extends Activity implements WearLink.Log {
             if (m != null) etMac.setText(m);
             if (k != null) etKey.setText(k);
             if (it.getBooleanExtra("autoconnect", false)) {
-                String mm = etMac.getText().toString().trim();
-                bg(() -> { try { link = new WearLink(this); link.connect(mm); } catch (Exception e) { log("❌ " + e); } });
-            }
-            if (it.getBooleanExtra("autoauth", false)) {
+                final String mm = etMac.getText().toString().trim();
+                final String kk = etKey.getText().toString().trim();
+                final boolean autoAuth = it.getBooleanExtra("autoauth", false);
                 bg(() -> {
                     try {
-                        for (int i = 0; i < 40 && link == null; i++) Thread.sleep(250);
-                        if (link == null) { log("未连接"); return; }
-                        byte[] key = hex2(etKey.getText().toString().trim());
-                        if (key.length != 16) { log("auth key 长度错误: " + key.length); return; }
-                        link.authenticate(key);
+                        link = new WearLink(this);
+                        link.connect(mm);
+                        if (autoAuth) {
+                            byte[] key = hex2(kk);
+                            if (key.length != 16) { log("auth key 长度错误: " + key.length + " 字节"); return; }
+                            link.authenticate(key);
+                        }
                     } catch (Exception e) { log("❌ " + e); }
                 });
             }
