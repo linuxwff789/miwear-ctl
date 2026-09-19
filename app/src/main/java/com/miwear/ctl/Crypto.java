@@ -1,0 +1,82 @@
+package com.miwear.ctl;
+
+import org.bouncycastle.crypto.modes.GCMBlockCipher;
+import org.bouncycastle.crypto.engines.AESEngine;
+import org.bouncycastle.crypto.params.AEADParameters;
+import org.bouncycastle.crypto.params.KeyParameter;
+
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.security.GeneralSecurityException;
+import java.util.Arrays;
+
+/** REDMI Watch 5 认证/加密原语（逆向自 com.xiaomi.wearable: itn / ffc / sid / CRCUtil） */
+public final class Crypto {
+    private Crypto() {}
+
+    /** HMAC-SHA256 (ffc.a) */
+    public static byte[] hmac(byte[] key, byte[] data) throws GeneralSecurityException {
+        Mac mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec(key, "HmacSHA256"));
+        return mac.doFinal(data);
+    }
+
+    /** HKDF-SHA256 Extract+Expand (sid + itn.i) */
+    public static byte[] hkdf(byte[] salt, byte[] ikm, byte[] info, int len) throws GeneralSecurityException {
+        byte[] prk = hmac(salt, ikm);                 // Extract
+        byte[] okm = new byte[len];
+        byte[] t = new byte[0];
+        int pos = 0;
+        for (int i = 1; pos < len; i++) {             // Expand
+            byte[] in = new byte[t.length + info.length + 1];
+            System.arraycopy(t, 0, in, 0, t.length);
+            System.arraycopy(info, 0, in, t.length, info.length);
+            in[in.length - 1] = (byte) i;
+            t = hmac(prk, in);
+            int n = Math.min(t.length, len - pos);
+            System.arraycopy(t, 0, okm, pos, n);
+            pos += n;
+        }
+        Arrays.fill(prk, (byte) 0);
+        return okm;
+    }
+
+    /** AES-GCM，tag 仅 4 字节（BC 的 GCMBlockCipher，macSize=32bit） */
+    public static byte[] gcm(boolean encrypt, byte[] key, byte[] nonce, byte[] in, int tagBits) {
+        GCMBlockCipher c = new GCMBlockCipher(new AESEngine());
+        c.init(encrypt, new AEADParameters(new KeyParameter(key), tagBits, nonce, null));
+        byte[] out = new byte[c.getOutputSize(in.length)];
+        int n = c.processBytes(in, 0, in.length, out, 0);
+        try { n += c.doFinal(out, n); } catch (Exception e) { return null; }
+        return out;
+    }
+
+    /** 认证握手结果：4 个会话密钥 */
+    public static final class Keys {
+        public final byte[] deviceKey, appKey, deviceIv, appIv;
+        Keys(byte[] dk, byte[] ak, byte[] div, byte[] aiv) {
+            deviceKey = dk; appKey = ak; deviceIv = div; appIv = aiv;
+        }
+        /** 由 encrypt_key + 两个随机数派生（已对真机抓包验证签名一致） */
+        public static Keys derive(byte[] secret, byte[] randomApp, byte[] randomDevice)
+                throws GeneralSecurityException {
+            byte[] salt = concat(randomApp, randomDevice);
+            byte[] okm = hkdf(salt, secret, "miwear-auth".getBytes(), 64);
+            return new Keys(Arrays.copyOfRange(okm, 0, 16), Arrays.copyOfRange(okm, 16, 32),
+                            Arrays.copyOfRange(okm, 32, 36), Arrays.copyOfRange(okm, 36, 40));
+        }
+    }
+
+    public static byte[] concat(byte[] a, byte[] b) {
+        byte[] r = new byte[a.length + b.length];
+        System.arraycopy(a, 0, r, 0, a.length);
+        System.arraycopy(b, 0, r, a.length, b.length);
+        return r;
+    }
+
+    public static String hex(byte[] b) {
+        StringBuilder sb = new StringBuilder();
+        for (byte x : b) sb.append(String.format("%02x", x));
+        return sb.toString();
+    }
+}

@@ -1,0 +1,28 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'com.miwear.ctl'
+    compileSdk 35
+    defaultConfig {
+        applicationId "com.miwear.ctl"
+        minSdk 29
+        targetSdk 35
+        versionCode 1
+        versionName "0.1.0"
+    }
+    signingConfigs {
+        release {
+            storeFile rootProject.file('release.keystore')
+            storePassword 'screenoff'
+            keyAlias 'screenoff'
+            keyPassword 'screenoff'
+        }
+    }
+    buildTypes { release { minifyEnabled false; signingConfig signingConfigs.release } }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+        encoding "UTF-8"
+    }
+    lint { abortOnError false }
+}
+dependencies { implementation 'org.bouncycastle:bcprov-jdk18on:1.78.1' }
