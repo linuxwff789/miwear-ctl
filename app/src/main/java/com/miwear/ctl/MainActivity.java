@@ -18,6 +18,7 @@ public class MainActivity extends Activity implements WearLink.Log {
     private TextView tvLog;
     private WearLink link;
     private final StringBuilder sb = new StringBuilder();
+    private static boolean LOG_STARTED = false;
 
     @Override protected void onCreate(Bundle st) {
         super.onCreate(st);
@@ -99,47 +100,59 @@ public class MainActivity extends Activity implements WearLink.Log {
             } catch (Exception e) { log("❌ " + e); }
         }));
 
-        try { new java.io.File(getFilesDir(), "log.txt").delete(); } catch (Exception ignored) {}
-        log("=== " + new java.util.Date() + " ===");
+        if (!LOG_STARTED) {
+            LOG_STARTED = true;
+            try { new java.io.File(getFilesDir(), "log.txt").delete(); } catch (Exception ignored) {}
+            log("=== " + new java.util.Date() + " ===");
+        }
         BluetoothAdapter ad0 = BluetoothAdapter.getDefaultAdapter();
         log(ad0 != null && ad0.isEnabled() ? "蓝牙已开启" : "⚠ 蓝牙未开启");
 
-        // 支持从 Intent 传入，避免在中文输入法下手打
-        android.content.Intent it = getIntent();
-        if (it != null) {
-            String m = it.getStringExtra("mac");
-            String k = it.getStringExtra("key");
-            if (m != null) etMac.setText(m);
-            if (k != null) etKey.setText(k);
-            if (it.getBooleanExtra("autoconnect", false)) {
-                final String mm = etMac.getText().toString().trim();
-                final String kk = etKey.getText().toString().trim();
-                final boolean autoAuth = it.getBooleanExtra("autoauth", false);
-                bg(() -> {
-                    try {
-                        link = new WearLink(this);
-                        link.connect(mm);
-                        link.handshake();
-                        if (autoAuth) {
-                            byte[] key = hex2(kk);
-                            if (key.length != 16) { log("auth key 长度错误: " + key.length + " 字节"); return; }
-                            link.authenticate(key);
-                            String nt = it.getStringExtra("notify_title");
-                            if (nt != null) {
-                                Thread.sleep(1500);
-                                link.pushNotification(
-                                    it.getStringExtra("notify_pkg") == null ? "com.termux" : it.getStringExtra("notify_pkg"),
-                                    nt,
-                                    it.getStringExtra("notify_text") == null ? "hello" : it.getStringExtra("notify_text"),
-                                    "MiWear", 1);
-                            }
-                        }
-                    } catch (Exception e) { log("❌ " + e); }
-                });
-            }
-        }
+        handleIntent(getIntent());
 
         setContentView(root);
+    }
+
+    /** 处理启动参数；singleTask 下 am start 走 onNewIntent，必须也走这里 */
+    private void handleIntent(android.content.Intent it) {
+        if (it == null) return;
+        String m = it.getStringExtra("mac");
+        String k = it.getStringExtra("key");
+        if (m != null) etMac.setText(m);
+        if (k != null) etKey.setText(k);
+        if (it.getBooleanExtra("autoconnect", false)) {
+            final String mm = etMac.getText().toString().trim();
+            final String kk = etKey.getText().toString().trim();
+            final boolean autoAuth = it.getBooleanExtra("autoauth", false);
+            bg(() -> {
+                try {
+                    if (link != null) { try { link.close(); } catch (Exception ignored) {} link = null; }
+                    link = new WearLink(this);
+                    link.connect(mm);
+                    link.handshake();
+                    if (autoAuth) {
+                        byte[] key = hex2(kk);
+                        if (key.length != 16) { log("auth key 长度错误: " + key.length + " 字节"); return; }
+                        link.authenticate(key);
+                        String nt = it.getStringExtra("notify_title");
+                        if (nt != null) {
+                            Thread.sleep(1500);
+                            String np = it.getStringExtra("notify_pkg");
+                            String nx = it.getStringExtra("notify_text");
+                            link.pushNotification(np == null ? "com.termux" : np, nt,
+                                                  nx == null ? "hello" : nx, "MiWear", 1);
+                        }
+                    }
+                } catch (Exception e) { log("❌ " + e); }
+            });
+        }
+    }
+
+    @Override protected void onNewIntent(android.content.Intent it) {
+        super.onNewIntent(it);
+        setIntent(it);
+        log("--- onNewIntent ---");
+        handleIntent(it);
     }
 
     private TextView label(String s) { TextView t = new TextView(this); t.setText(s); return t; }
