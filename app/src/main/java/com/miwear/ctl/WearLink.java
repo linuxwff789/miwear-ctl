@@ -293,4 +293,66 @@ public class WearLink {
         log.log("通知 oyt = " + Crypto.hex(oyt.toByteArray()));
         sendEncrypted(Framing.CH_PB, oyt.toByteArray());
     }
+
+    // ───────────────── 应用安装（.rpk 侧载）─────────────────
+    /**
+     * 协议逆向自 MassDataHandler / MassDataDispatcher / RunningMassManager：
+     *  ① MassPrepare（PB 通道，加密）：oyt{f1=22,f2=0} + eqg{f1=iqg{ f1=dataType, f2=md5, f3=length }}
+     *  ② 分片（MASS 通道 ch=2 op=1，明文）：
+     *       [05 00][片序号:2B LE][仅首片: 00 | s | md5(16) | len(4B LE)] + 数据
+     *  ③ 设备自动解包安装到 /data/quickapp/<包名>/
+     */
+    public void installRpk(byte[] rpk, String dataId) throws Exception {
+        if (keys == null) throw new IllegalStateException("未认证");
+
+        java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
+        byte[] md5 = md.digest(rpk);
+        int total = rpk.length;
+        log.log("安装 rpk: " + dataId + " " + total + " 字节 md5=" + Crypto.hex(md5));
+
+        // ① MassPrepare
+        java.io.ByteArrayOutputStream iqg = new java.io.ByteArrayOutputStream();
+        iqg.write(0x08); PB.varint(iqg, 64);            // f1 = dataType = 64
+        PB.bytes(iqg, 2, md5);                          // f2 = md5
+        iqg.write(0x18); PB.varint(iqg, total);         // f3 = 文件长度
+
+        java.io.ByteArrayOutputStream eqg = new java.io.ByteArrayOutputStream();
+        PB.bytes(eqg, 1, iqg.toByteArray());            // eqg.f1 = iqg
+
+        java.io.ByteArrayOutputStream oyt = new java.io.ByteArrayOutputStream();
+        oyt.write(0x08); PB.varint(oyt, 22);            // f1 = MASS 模块
+        oyt.write(0x10); PB.varint(oyt, 0);             // f2 = prepare
+        // f24 (key = 0xc2 0x01)
+        oyt.write((byte) 0xC2); oyt.write(0x01);
+        PB.varint(oyt, eqg.size()); oyt.write(eqg.toByteArray(), 0, eqg.size());
+        log.log("MassPrepare = " + Crypto.hex(oyt.toByteArray()));
+
+        sendEncrypted(Framing.CH_PB, oyt.toByteArray());
+        Framing.Frame resp = await((byte) -1, 5000);
+        if (resp != null) log.log("MassPrepare 应答: " + Crypto.hex(resp.data()));
+
+        // ② 分片发送（MASS 通道，明文）
+        final int SEG = 16384;
+        int off = 0, idx = 0;
+        while (off < total) {
+            idx++;
+            int n = Math.min(SEG, total - off);
+            java.io.ByteArrayOutputStream seg = new java.io.ByteArrayOutputStream();
+            seg.write(0x05); seg.write(0x00);
+            seg.write(idx & 0xFF); seg.write((idx >> 8) & 0xFF);   // 片序号 LE
+            if (idx == 1) {                                        // 仅首片带 22B 头
+                seg.write(0x00);
+                seg.write(0x40);                                   // s = 64
+                seg.write(md5, 0, 16);
+                seg.write(total & 0xFF); seg.write((total >> 8) & 0xFF);
+                seg.write((total >> 16) & 0xFF); seg.write((total >> 24) & 0xFF);
+            }
+            seg.write(rpk, off, n);
+            sendData(Framing.CH_MASS, Framing.OP_WRITE, seg.toByteArray());
+            off += n;
+            log.log("  片 " + idx + " 已发 (" + n + "B)");
+            Framing.Frame a = await((byte) -1, 3000);
+        }
+        log.log("✅ rpk 发送完成，共 " + idx + " 片");
+    }
 }

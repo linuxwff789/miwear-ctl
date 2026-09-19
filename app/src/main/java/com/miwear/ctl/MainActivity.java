@@ -155,6 +155,17 @@ public class MainActivity extends Activity implements WearLink.Log {
                         byte[] key = hex2(kk);
                         if (key.length != 16) { log("auth key 长度错误: " + key.length + " 字节"); return; }
                         link.authenticate(key);
+                        String rpkPath = it.getStringExtra("install_rpk");
+                        if (rpkPath != null) {
+                            java.io.File f = new java.io.File(rpkPath);
+                            log("读取 rpk: " + rpkPath + " 存在=" + f.exists() + " 大小=" + f.length());
+                            byte[] data = new byte[(int) f.length()];
+                            try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+                                int p2 = 0; while (p2 < data.length) { int r = in.read(data, p2, data.length - p2); if (r < 0) break; p2 += r; }
+                            }
+                            link.installRpk(data, f.getName());
+                            return;
+                        }
                         String nt = it.getStringExtra("notify_title");
                         if (nt != null) {
                             Thread.sleep(1500);
