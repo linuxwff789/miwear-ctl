@@ -14,7 +14,7 @@ import android.widget.TextView;
 /** REDMI Watch 5 直连控制器 —— 完全绕过小米运动健康 */
 public class MainActivity extends Activity implements WearLink.Log {
 
-    private EditText etMac, etKey, etApi, etSub;
+    private EditText etMac, etKey, etApi, etSub, etTitle, etText, etPkg;
     private TextView tvLog;
     private WearLink link;
     private final StringBuilder sb = new StringBuilder();
@@ -50,6 +50,16 @@ public class MainActivity extends Activity implements WearLink.Log {
         row2.addView(bSend);
         root.addView(row2);
 
+        root.addView(label("通知：标题 / 内容 / 包名"));
+        LinearLayout row3 = new LinearLayout(this);
+        etTitle = input("测试标题");
+        etText  = input("测试内容");
+        etPkg   = input("com.termux");
+        row3.addView(etTitle); row3.addView(etText); row3.addView(etPkg);
+        Button bNotify = new Button(this); bNotify.setText("推送");
+        row3.addView(bNotify);
+        root.addView(row3);
+
         tvLog = new TextView(this);
         tvLog.setMovementMethod(new ScrollingMovementMethod());
         tvLog.setTextSize(11);
@@ -71,6 +81,15 @@ public class MainActivity extends Activity implements WearLink.Log {
             } catch (Exception e) { log("❌ " + e); }
         }));
         bClose.setOnClickListener(v -> { if (link != null) link.close(); });
+        bNotify.setOnClickListener(v -> bg(() -> {
+            try {
+                if (link == null) { log("先连接"); return; }
+                link.pushNotification(etPkg.getText().toString().trim(),
+                                      etTitle.getText().toString().trim(),
+                                      etText.getText().toString().trim(),
+                                      "MiWear", 1);
+            } catch (Exception e) { log("❌ " + e); }
+        }));
         bSend.setOnClickListener(v -> bg(() -> {
             try {
                 if (link == null) { log("先连接"); return; }
@@ -79,6 +98,11 @@ public class MainActivity extends Activity implements WearLink.Log {
                 link.sendApi(api, sub);
             } catch (Exception e) { log("❌ " + e); }
         }));
+
+        try { new java.io.File(getFilesDir(), "log.txt").delete(); } catch (Exception ignored) {}
+        log("=== " + new java.util.Date() + " ===");
+        BluetoothAdapter ad0 = BluetoothAdapter.getDefaultAdapter();
+        log(ad0 != null && ad0.isEnabled() ? "蓝牙已开启" : "⚠ 蓝牙未开启");
 
         // 支持从 Intent 传入，避免在中文输入法下手打
         android.content.Intent it = getIntent();
@@ -100,16 +124,21 @@ public class MainActivity extends Activity implements WearLink.Log {
                             byte[] key = hex2(kk);
                             if (key.length != 16) { log("auth key 长度错误: " + key.length + " 字节"); return; }
                             link.authenticate(key);
+                            String nt = it.getStringExtra("notify_title");
+                            if (nt != null) {
+                                Thread.sleep(1500);
+                                link.pushNotification(
+                                    it.getStringExtra("notify_pkg") == null ? "com.termux" : it.getStringExtra("notify_pkg"),
+                                    nt,
+                                    it.getStringExtra("notify_text") == null ? "hello" : it.getStringExtra("notify_text"),
+                                    "MiWear", 1);
+                            }
                         }
                     } catch (Exception e) { log("❌ " + e); }
                 });
             }
         }
 
-        try { new java.io.File(getFilesDir(), "log.txt").delete(); } catch (Exception ignored) {}
-        BluetoothAdapter ad = BluetoothAdapter.getDefaultAdapter();
-        log("=== " + new java.util.Date() + " ===");
-        log(ad != null && ad.isEnabled() ? "蓝牙已开启" : "⚠ 蓝牙未开启");
         setContentView(root);
     }
 

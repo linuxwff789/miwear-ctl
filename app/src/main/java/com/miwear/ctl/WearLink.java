@@ -237,11 +237,56 @@ public class WearLink {
         sendData(Framing.CH_PB, Framing.OP_WRITE, o.toByteArray());
     }
 
-    /** 加密会话数据（op=WRITE_ENC） */
+    private int counter = 0;
+
+    /**
+     * type 101 加密发送（op=WRITE_ENC）
+     *   wire  = counter(2B,LE) ‖ CCM(plaintext)
+     *   nonce = AppIV(4) ‖ 0x00000000(4) ‖ counter(4,LE)
+     */
     public void sendEncrypted(byte channel, byte[] plain) throws Exception {
         if (keys == null) throw new IllegalStateException("未认证");
-        byte[] nonce = Crypto.concat(keys.appIv, new byte[8]);   // 4+8 = 12B
+        counter++;
+        byte[] ctr4 = new byte[]{(byte) (counter & 0xFF), (byte) ((counter >> 8) & 0xFF),
+                                 (byte) ((counter >> 16) & 0xFF), (byte) ((counter >> 24) & 0xFF)};
+        byte[] nonce = Crypto.concat(Crypto.concat(keys.appIv, new byte[4]), ctr4);
         byte[] enc = Crypto.ccm(true, keys.appKey, nonce, plain, 32);
-        sendData(channel, Framing.OP_WRITE_ENC, enc);
+        if (enc == null) throw new IllegalStateException("CCM 加密失败");
+        byte[] wire = new byte[2 + enc.length];
+        wire[0] = (byte) (counter & 0xFF); wire[1] = (byte) ((counter >> 8) & 0xFF);
+        System.arraycopy(enc, 0, wire, 2, enc.length);
+        sendData(channel, Framing.OP_WRITE_ENC, wire);
+    }
+
+    // ───────────────────── 通知推送（type 101）─────────────────────
+    /**
+     * 报文结构（逆向自 BlueToothSender.addNotifications / oyt / kli / lli）：
+     *   oyt{ f1=7(通知模块) f2=0(添加) f9=kli{ f3=lli.e{ f1 repeated=lli } } }
+     *   lli{ f1=包名 f2=标题 f3=内容 f4=应用名 f7=id f12=key }
+     */
+    public void pushNotification(String pkg, String title, String text, String appName, int id) throws Exception {
+        if (keys == null) throw new IllegalStateException("未认证");
+
+        ByteArrayOutputStream lli = new ByteArrayOutputStream();
+        PB.str(lli, 1, pkg == null ? "" : pkg);
+        PB.str(lli, 2, title == null ? "" : title);
+        PB.str(lli, 3, text == null ? "" : text);
+        PB.str(lli, 4, appName == null ? "" : appName);
+        lli.write(0x38); PB.varint(lli, id);            // f7 = id
+        PB.str(lli, 12, (pkg == null ? "" : pkg) + "|" + id);
+
+        ByteArrayOutputStream llie = new ByteArrayOutputStream();
+        PB.bytes(llie, 1, lli.toByteArray());           // lli.e.f1 repeated
+
+        ByteArrayOutputStream kli = new ByteArrayOutputStream();
+        PB.bytes(kli, 3, llie.toByteArray());           // kli.f3
+
+        ByteArrayOutputStream oyt = new ByteArrayOutputStream();
+        oyt.write(0x08); PB.varint(oyt, 7);             // f1 模块
+        oyt.write(0x10); PB.varint(oyt, 0);             // f2 子命令
+        PB.bytes(oyt, 9, kli.toByteArray());            // f9
+
+        log.log("通知 oyt = " + Crypto.hex(oyt.toByteArray()));
+        sendEncrypted(Framing.CH_PB, oyt.toByteArray());
     }
 }
