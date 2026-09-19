@@ -66,6 +66,20 @@ public final class Crypto {
         return out;
     }
 
+    /**
+     * 会话加密（真机算法，来自 defpackage.r1）：
+     *   Cipher.getInstance("AES/CTR/NoPadding")，IV = key 本身（16 字节）
+     *   无 MAC。App→Device 用 AppKey；Device→App 用 DeviceKey。
+     */
+    public static byte[] ctr(byte[] key, byte[] data) {
+        try {
+            javax.crypto.Cipher c = javax.crypto.Cipher.getInstance("AES/CTR/NoPadding");
+            c.init(javax.crypto.Cipher.ENCRYPT_MODE, new javax.crypto.spec.SecretKeySpec(key, "AES"),
+                   new javax.crypto.spec.IvParameterSpec(key));
+            return c.doFinal(data);
+        } catch (Exception e) { return null; }
+    }
+
     /** 认证握手结果：4 个会话密钥 */
     public static final class Keys {
         public final byte[] deviceKey, appKey, deviceIv, appIv;
