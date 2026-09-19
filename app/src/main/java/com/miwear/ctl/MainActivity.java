@@ -80,6 +80,30 @@ public class MainActivity extends Activity implements WearLink.Log {
             } catch (Exception e) { log("❌ " + e); }
         }));
 
+        // 支持从 Intent 传入，避免在中文输入法下手打
+        android.content.Intent it = getIntent();
+        if (it != null) {
+            String m = it.getStringExtra("mac");
+            String k = it.getStringExtra("key");
+            if (m != null) etMac.setText(m);
+            if (k != null) etKey.setText(k);
+            if (it.getBooleanExtra("autoconnect", false)) {
+                String mm = etMac.getText().toString().trim();
+                bg(() -> { try { link = new WearLink(this); link.connect(mm); } catch (Exception e) { log("❌ " + e); } });
+            }
+            if (it.getBooleanExtra("autoauth", false)) {
+                bg(() -> {
+                    try {
+                        for (int i = 0; i < 40 && link == null; i++) Thread.sleep(250);
+                        if (link == null) { log("未连接"); return; }
+                        byte[] key = hex2(etKey.getText().toString().trim());
+                        if (key.length != 16) { log("auth key 长度错误: " + key.length); return; }
+                        link.authenticate(key);
+                    } catch (Exception e) { log("❌ " + e); }
+                });
+            }
+        }
+
         BluetoothAdapter ad = BluetoothAdapter.getDefaultAdapter();
         log(ad != null && ad.isEnabled() ? "蓝牙已开启" : "⚠ 蓝牙未开启");
         setContentView(root);
