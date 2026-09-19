@@ -1,5 +1,6 @@
 package com.miwear.ctl;
 
+import org.bouncycastle.crypto.modes.CCMBlockCipher;
 import org.bouncycastle.crypto.modes.GCMBlockCipher;
 import org.bouncycastle.crypto.engines.AESEngine;
 import org.bouncycastle.crypto.params.AEADParameters;
@@ -45,6 +46,20 @@ public final class Crypto {
     public static byte[] gcm(boolean encrypt, byte[] key, byte[] nonce, byte[] in, int tagBits) {
         GCMBlockCipher c = new GCMBlockCipher(new AESEngine());
         c.init(encrypt, new AEADParameters(new KeyParameter(key), tagBits, nonce, null));
+        byte[] out = new byte[c.getOutputSize(in.length)];
+        int n = c.processBytes(in, 0, in.length, out, 0);
+        try { n += c.doFinal(out, n); } catch (Exception e) { return null; }
+        return out;
+    }
+
+    /**
+     * AES-CCM（BouncyCastle CCMBlockCipher，macSize=32bit）—— 这才是真机用的算法。
+     * nonce = IV(4B) ‖ 0x00000000(4B) ‖ counter(4B)（非 101 类型时 counter 段全 0）
+     * 返回 ciphertext ‖ mac(4B)
+     */
+    public static byte[] ccm(boolean encrypt, byte[] key, byte[] nonce, byte[] in, int macBits) {
+        CCMBlockCipher c = new CCMBlockCipher(new AESEngine());
+        c.init(encrypt, new AEADParameters(new KeyParameter(key), macBits, nonce, null));
         byte[] out = new byte[c.getOutputSize(in.length)];
         int n = c.processBytes(in, 0, in.length, out, 0);
         try { n += c.doFinal(out, n); } catch (Exception e) { return null; }
