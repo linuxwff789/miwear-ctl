@@ -21,6 +21,12 @@ public class WearLink {
 
     public interface Log { void log(String s); }
 
+    static byte[] hex(String s) {
+        byte[] b = new byte[s.length() / 2];
+        for (int i = 0; i < b.length; i++) b[i] = (byte) Integer.parseInt(s.substring(i * 2, i * 2 + 2), 16);
+        return b;
+    }
+
     /** 标准 SPP UUID；手表 SDP 记录里注册了它，用它可让系统自动解析 RFCOMM 通道号 */
     public static final UUID SPP = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
 
@@ -32,7 +38,11 @@ public class WearLink {
     private volatile boolean running;
     private final ArrayDeque<Framing.Frame> queue = new ArrayDeque<>();
     private byte seq = 0;
+    private byte cmdSeq = 0;
     private Crypto.Keys keys;
+
+    /** 能力协商帧（抓包复刻，必须在 apiCode 之前发，否则手表会重启） */
+    private static final byte[] HELLO = hex("030001000002020000fc03020020000402001027");
 
     public WearLink(Log log) { this.log = log; }
 
@@ -120,6 +130,19 @@ public class WearLink {
 
     private void ack(Framing.Frame f) throws Exception {
         write(Framing.build(Framing.TYPE_ACK, f.seq, new byte[0]));
+    }
+
+    // ───────────────────────── 握手 ─────────────────────────
+    /** 连接后第一步：CMD 能力协商。返回设备应答。 */
+    public byte[] handshake() throws Exception {
+        byte[] payload = Crypto.concat(new byte[]{Framing.CH_PB, Framing.OP_WRITE}, HELLO);
+        byte[] f = Framing.build(Framing.TYPE_CMD, cmdSeq++, payload);
+        log.log("→ " + Framing.parse(f, f.length, null).get(0));
+        write(f);
+        Framing.Frame r = await(Framing.TYPE_CMD, 6000);
+        if (r == null) { log.log("⚠ 未收到 CMD 应答"); return null; }
+        log.log("握手应答: " + Crypto.hex(r.payload));
+        return r.payload;
     }
 
     // ───────────────────────── 认证 ─────────────────────────

@@ -95,6 +95,7 @@ public class MainActivity extends Activity implements WearLink.Log {
                     try {
                         link = new WearLink(this);
                         link.connect(mm);
+                        link.handshake();
                         if (autoAuth) {
                             byte[] key = hex2(kk);
                             if (key.length != 16) { log("auth key 长度错误: " + key.length + " 字节"); return; }
