@@ -106,7 +106,9 @@ public class MainActivity extends Activity implements WearLink.Log {
             }
         }
 
+        try { new java.io.File(getFilesDir(), "log.txt").delete(); } catch (Exception ignored) {}
         BluetoothAdapter ad = BluetoothAdapter.getDefaultAdapter();
+        log("=== " + new java.util.Date() + " ===");
         log(ad != null && ad.isEnabled() ? "蓝牙已开启" : "⚠ 蓝牙未开启");
         setContentView(root);
     }
@@ -124,6 +126,11 @@ public class MainActivity extends Activity implements WearLink.Log {
     }
 
     @Override public void log(String s) {
-        runOnUiThread(() -> { sb.append(s).append('\n'); tvLog.setText(sb.toString()); });
+        String line = s + "\n";
+        try (java.io.FileOutputStream f = new java.io.FileOutputStream(
+                new java.io.File(getFilesDir(), "log.txt"), true)) {
+            f.write(line.getBytes("UTF-8"));
+        } catch (Exception ignored) {}
+        runOnUiThread(() -> { sb.append(line); tvLog.setText(sb.toString()); });
     }
 }
