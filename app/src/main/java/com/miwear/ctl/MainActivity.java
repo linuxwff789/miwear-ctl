@@ -105,6 +105,27 @@ public class MainActivity extends Activity implements WearLink.Log {
             try { new java.io.File(getFilesDir(), "log.txt").delete(); } catch (Exception ignored) {}
             log("=== " + new java.util.Date() + " ===");
         }
+        // 发一条本机通知，用于给官方 App 做抓包校准
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            try { requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1); } catch (Exception ignored) {}
+        }
+        if (getIntent() != null && getIntent().getBooleanExtra("localnotify", false)) {
+            try {
+                android.app.NotificationManager nm = getSystemService(android.app.NotificationManager.class);
+                String ch = "miwear";
+                if (android.os.Build.VERSION.SDK_INT >= 26) {
+                    nm.createNotificationChannel(new android.app.NotificationChannel(ch, "miwear", android.app.NotificationManager.IMPORTANCE_DEFAULT));
+                }
+                android.app.Notification n = new android.app.Notification.Builder(this, ch)
+                        .setSmallIcon(android.R.drawable.ic_dialog_info)
+                        .setContentTitle("测试标题")
+                        .setContentText("测试内容 hello")
+                        .build();
+                nm.notify(1234, n);
+                log("已发本机通知");
+            } catch (Exception e) { log("发通知失败: " + e); }
+        }
+
         BluetoothAdapter ad0 = BluetoothAdapter.getDefaultAdapter();
         log(ad0 != null && ad0.isEnabled() ? "蓝牙已开启" : "⚠ 蓝牙未开启");
 
