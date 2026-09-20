@@ -12,7 +12,8 @@
 #   key [--save]              从官方 App 数据库自动读取 auth key（--save 写入配置）
 #   uninstall <包名> [指纹]   卸载（设备不回执，看手表界面）
 #   launch <包名> [uri]       在手表上启动应用（设备不回执）
-#   notify <标题> <内容> [包]  推一条通知到手表
+#   notify <标题> <内容> [包]  推一条普通通知到手表（短震动）
+#   call <号码> [姓名]         模拟来电（长震动/响铃）
 #   info                      查询设备状态（电量等，module 2 sub 78）
 #   find                      找手表：让手表震动/响铃
 #   msg <包名> <文本>          给手表快应用发消息（interconnect）
@@ -185,6 +186,13 @@ cmd_notify() {
   local t=${1:-}; local x=${2:-}; local p=${3:-com.termux}
   [ -n "$t" ] || die "用法: miwear notify <标题> <内容> [包名]"
   do_action "通知 oyt" 40 --es notify_title "$t" --es notify_text "$x" --es notify_pkg "$p"
+}
+
+# 来电通知（module 21 sub 3）
+cmd_call() {
+  local num=${1:-}; local name=${2:-}
+  [ -n "$num" ] || die "用法: miwear call <号码> [姓名]"
+  do_action "来电 oyt" 40 --es call_number "$num" --es call_name "$name"
 }
 
 # 设备状态（module 8 sub 29，含电量）
@@ -434,6 +442,7 @@ case "${1:-}" in
   uninstall) shift; cmd_uninstall "$@" ;;
   launch)    shift; cmd_launch "$@" ;;
   notify)    shift; cmd_notify "$@" ;;
+  call)      shift; cmd_call "$@" ;;
   info)      shift; cmd_info "$@" ;;
   find)      shift; cmd_find "$@" ;;
   msg)       shift; cmd_msg "$@" ;;
@@ -442,6 +451,6 @@ case "${1:-}" in
   net)       shift; cmd_net "$@" ;;
   log)       shift; cmd_log "$@" ;;
   build)     shift; cmd_build "$@" ;;
-  ""|-h|--help|help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//' ;;
+  ""|-h|--help|help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) die "未知命令: $1（试 miwear help）" ;;
 esac

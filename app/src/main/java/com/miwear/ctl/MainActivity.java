@@ -195,6 +195,11 @@ public class MainActivity extends Activity implements WearLink.Log {
                         if (lp != null) { link.launchApp(lp, it.getStringExtra("launch_uri")); return; }
                         String raw = it.getStringExtra("raw_hex");
                         if (raw != null) { link.rawCall(hex2(raw), 8000); return; }
+                        String cn = it.getStringExtra("call_number");
+                        if (cn != null) {
+                            link.incomingCall(cn, it.getStringExtra("call_name"));
+                            return;
+                        }
                         String ap = it.getStringExtra("app_pkg");
                         if (ap != null) { link.appStatus(ap); return; }
                         if (it.getBooleanExtra("query_status", false)) { link.deviceStatus(); return; }
@@ -210,8 +215,7 @@ public class MainActivity extends Activity implements WearLink.Log {
                             link.syncPhoneAppStatus(sp, it.getIntExtra("sync_status", 1));
                             return;
                         }
-                        String nt = it.getStringExtra("notify_title");
-                        if (nt != null) {
+                        String nt = it.getStringExtra("notify_title");                        if (nt != null) {
                             Thread.sleep(1500);
                             String np = it.getStringExtra("notify_pkg");
                             String nx = it.getStringExtra("notify_text");

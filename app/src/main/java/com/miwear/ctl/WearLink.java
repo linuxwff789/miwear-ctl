@@ -349,7 +349,8 @@ public class WearLink {
         lli.write(0x38); PB.varint(lli, id);      // f7  id
         PB.str(lli, 9, "");                       // f9  appGroup
         PB.str(lli, 12, key);                     // f12 key
-        lli.write((byte) 0x80); lli.write(0x01); lli.write(0x01);   // f16 = true
+        // ⚠ f16 官方只在「微信来电」时置 true（BaseNotifySyncService: isWeChatIncomingCall → lliVar.p = true），
+        //   普通通知设了它手表会当来电长震动。这里绝不能设！
 
         ByteArrayOutputStream llie = new ByteArrayOutputStream();
         PB.bytes(llie, 1, lli.toByteArray());     // lli.e.f1 repeated
@@ -464,6 +465,22 @@ public class WearLink {
                 catch (Exception e) { log.log("❌ init 发送失败: " + e); }
             }
         }, "net-init").start();
+    }
+
+    // ───────────────── 来电（module 21）─────────────────
+    /**
+     * 来电通知（module 21 sub 3）—— 官方 BlueToothSender.sendContactInfo：
+     *   oyt{f1=21, f2=3, f23(ux4)={f3(vx4)={f1=姓名, f2=号码}}}
+     */
+    public void incomingCall(String number, String displayName) throws Exception {
+        ByteArrayOutputStream v = new ByteArrayOutputStream();
+        PB.str(v, 1, displayName == null ? "" : displayName);
+        PB.str(v, 2, number == null ? "" : number);
+        ByteArrayOutputStream u = new ByteArrayOutputStream();
+        PB.bytes(u, 3, v.toByteArray());
+        byte[] body = oyt(21, 3, 23, u.toByteArray());
+        log.log("来电 oyt = " + Crypto.hex(body));
+        sendEncrypted(Framing.CH_PB, body);
     }
 
     // ───────────────── 应用管理（module 20）─────────────────
