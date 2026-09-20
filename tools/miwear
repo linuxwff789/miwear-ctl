@@ -14,7 +14,7 @@
 #   launch <包名> [uri]       在手表上启动应用（设备不回执）
 #   notify <标题> <内容> [包]  推一条通知到手表
 #   raw <hex>                 发任意 oyt 明文（加密）并打印应答，调试用
-#   net                       启动手表联网网关（手机侧 libnetproxy.so 做 NAT）
+#   net [--launch <包名> [uri]]  启动手表联网网关（手机侧 libnetproxy.so 做 NAT）
 #   log [-n 行数] [-f]        看 App 日志（-f 持续跟随）
 #   build apk|rpk [--install] 触发 GitHub Actions 构建
 #
@@ -189,15 +189,29 @@ cmd_raw() {
 }
 
 # 启动手表联网网关（手机侧跑 libnetproxy.so，把 ch7 的 IP 包做 NAT）
+#   miwear net [--launch <包名> [uri]]   可选：同时拉起手表上的应用
 cmd_net() {
+  local lp="" lu=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --launch) lp=${2:-}; shift 2 ;;
+      *) [ -n "$lp" ] && [ -z "$lu" ] && lu=$1; shift ;;
+    esac
+  done
   ensure_key; need_root; need_app
   local run="$$-$RANDOM"
   su -c "am force-stop com.mi.health; am force-stop $PKG" 2>/dev/null
   sleep 1
-  launch_app --es run_id "$run" --ez netproxy true
+  if [ -n "$lp" ] && [ -n "$lu" ]; then
+    launch_app --es run_id "$run" --ez netproxy true --es launch_pkg "$lp" --es launch_uri "$lu"
+  elif [ -n "$lp" ]; then
+    launch_app --es run_id "$run" --ez netproxy true --es launch_pkg "$lp"
+  else
+    launch_app --es run_id "$run" --ez netproxy true
+  fi
   wait_for "RUN $run" 25 || { warn "App 没起来"; log_dump; return 1; }
   if wait_for "netproxy 已启动|libnetproxy.so 未加载" 40; then
-    log_dump | tail -6
+    log_dump | tail -8
     ok "联网网关已启动（保持连接中）"
     info "手表端发起请求后，用 miwear log 看 ch7 流量"
   else
@@ -340,11 +354,24 @@ for r in d.get('workflow_runs',[]):
 
   info "下载产物 $artifact …"
   mkdir -p "$HOME/miwear-ctl/dist"
-  local aid
-  aid=$(gh_api "https://api.github.com/repos/$REPO/actions/runs/$rid/artifacts" \
-        | python3 -c "import json,sys;print(json.load(sys.stdin)['artifacts'][0]['id'])")
-  curl -sL -m 180 -H "Authorization: token $tk" \
-    "https://api.github.com/repos/$REPO/actions/artifacts/$aid/zip" -o "$TMP/art.zip" || die "下载失败"
+  local aid="" i2
+  for i2 in 1 2 3 4 5; do
+    aid=$(gh_api "https://api.github.com/repos/$REPO/actions/runs/$rid/artifacts" \
+          | python3 -c "import json,sys;a=json.load(sys.stdin)['artifacts'];print(a[0]['id'] if a else '')" 2>/dev/null)
+    [ -n "$aid" ] && break
+    sleep 6
+  done
+  [ -n "$aid" ] || die "拿不到 artifact id（构建产物可能已过期）"
+  local got=0
+  for i2 in 1 2 3 4 5; do
+    rm -f "$TMP/art.zip"
+    if curl -sL -m 300 --retry 3 --retry-delay 3 -H "Authorization: token $tk" \
+         "https://api.github.com/repos/$REPO/actions/artifacts/$aid/zip" -o "$TMP/art.zip" \
+       && unzip -tq "$TMP/art.zip" >/dev/null 2>&1; then got=1; break; fi
+    info "下载重试 $i2 …"
+    sleep 6
+  done
+  [ $got -eq 1 ] || die "下载产物失败（网络）"
   rm -rf "$TMP/art"; mkdir -p "$TMP/art"
   unzip -o -q "$TMP/art.zip" -d "$TMP/art" || die "解压失败"
 

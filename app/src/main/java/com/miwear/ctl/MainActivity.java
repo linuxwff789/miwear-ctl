@@ -166,6 +166,8 @@ public class MainActivity extends Activity implements WearLink.Log {
                         byte[] key = hex2(kk);
                         if (key.length != 16) { log("auth key 长度错误: " + key.length + " 字节"); return; }
                         link.authenticate(key);
+                        // 联网网关不 return：可以接着做后面的动作（如拉起手表应用）
+                        if (it.getBooleanExtra("netproxy", false)) link.startNetProxy();
                         String rpkPath = it.getStringExtra("install_rpk");
                         if (rpkPath != null) {
                             java.io.File f = new java.io.File(rpkPath);
@@ -190,7 +192,6 @@ public class MainActivity extends Activity implements WearLink.Log {
                         if (raw != null) { link.rawCall(hex2(raw), 8000); return; }
                         String ap = it.getStringExtra("app_pkg");
                         if (ap != null) { link.appStatus(ap); return; }
-                        if (it.getBooleanExtra("netproxy", false)) { link.startNetProxy(); return; }
                         String nt = it.getStringExtra("notify_title");
                         if (nt != null) {
                             Thread.sleep(1500);
