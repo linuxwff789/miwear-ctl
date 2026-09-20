@@ -480,8 +480,11 @@ public class WearLink {
     /** 发一条加密 oyt 并等**模块匹配**的应答，返回解密后的明文（超时返回 null） */
     public byte[] request(byte[] body, long timeoutMs) throws Exception {
         if (keys == null) throw new IllegalStateException("未认证");
-        long wantMod = -1;
-        for (PB.F g : PB.parse(body)) if (g.field == 1) wantMod = g.varint;
+        long wantMod = -1, wantSub = -1;
+        for (PB.F g : PB.parse(body)) {
+            if (g.field == 1) wantMod = g.varint;
+            else if (g.field == 2) wantSub = g.varint;
+        }
         sendEncrypted(Framing.CH_PB, body);
         long end = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < end) {
@@ -491,9 +494,12 @@ public class WearLink {
             byte[] pt = Crypto.ctr(keys.deviceKey, f.data());
             if (pt == null) continue;
             if (wantMod >= 0) {
-                long m = -1;
-                for (PB.F g : PB.parse(pt)) if (g.field == 1) m = g.varint;
-                if (m != wantMod) continue;          // 不是我们要的模块的应答，跳过
+                long m = -1, s = -1;
+                for (PB.F g : PB.parse(pt)) {
+                    if (g.field == 1) m = g.varint;
+                    else if (g.field == 2) s = g.varint;
+                }
+                if (m != wantMod || (wantSub >= 0 && s != wantSub)) continue;  // 不是我们要的应答
             }
             return pt;
         }
