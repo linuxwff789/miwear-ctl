@@ -109,8 +109,12 @@ public class WearLink {
                                 else if (g.field == 2) sub = g.varint;
                             }
                             if (mod == 18 && sub == 0) {
-                                log.log("↩ 手表问联网能力，回 module18 sub1");
-                                sendNetCapability();
+                                if (net != null && net.isStarted()) {
+                                    log.log("↩ 手表问联网能力，回 module18 sub1");
+                                    sendNetCapability();
+                                } else {
+                                    log.log("↩ 手表问联网能力（网关未开，不应答）");
+                                }
                                 continue;
                             }
                             if (mod == 2 && sub == 2) {          // 设备信息心跳
