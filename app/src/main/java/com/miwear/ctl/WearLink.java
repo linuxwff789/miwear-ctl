@@ -217,6 +217,26 @@ public class WearLink {
         return keys;
     }
 
+    /** 从 rpk 的 manifest.json 里取字段 */
+    private static String parseManifest(byte[] rpk, String key) {
+        try {
+            java.util.zip.ZipInputStream zin = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(rpk));
+            java.util.zip.ZipEntry e;
+            while ((e = zin.getNextEntry()) != null) {
+                if ("manifest.json".equals(e.getName())) {
+                    java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                    byte[] b = new byte[4096]; int n;
+                    while ((n = zin.read(b)) > 0) bo.write(b, 0, n);
+                    String js = new String(bo.toByteArray(), "UTF-8");
+                    java.util.regex.Matcher m = java.util.regex.Pattern
+                        .compile("\"" + key + "\"\\s*:\\s*\"?([^\",}]+)\"?").matcher(js);
+                    if (m.find()) return m.group(1).trim();
+                }
+            }
+        } catch (Exception ex) { }
+        return null;
+    }
+
     /** jd0Var：app 信息（字段号逆向自 WearAuthV2，值可后续校准） */
     private byte[] buildAppInfo() {
         ByteArrayOutputStream o = new ByteArrayOutputStream();
@@ -309,6 +329,42 @@ public class WearLink {
         byte[] md5 = md.digest(rpk);
         int total = rpk.length;
         log.log("安装 rpk: " + dataId + " " + total + " 字节 md5=" + Crypto.hex(md5));
+
+        // ⓪ prepareInstallApp（module 20 sub 1）—— 告诉手表包名/版本号/大小，缺这步装不上！
+        String pkg = parseManifest(rpk, "package");
+        int ver = 0;
+        try { ver = Integer.parseInt(parseManifest(rpk, "versionCode")); } catch (Exception ignored) {}
+        if (pkg == null || pkg.isEmpty()) throw new IllegalStateException("rpk 里没找到 package");
+        log.log("包名=" + pkg + " versionCode=" + ver + " size=" + total);
+
+        java.io.ByteArrayOutputStream mxr = new java.io.ByteArrayOutputStream();
+        PB.str(mxr, 1, pkg);                            // f1 包名
+        mxr.write(0x10); PB.varint(mxr, ver);           // f2 versionCode
+        mxr.write(0x18); PB.varint(mxr, total);         // f3 packageSize
+
+        java.io.ByteArrayOutputStream yxr = new java.io.ByteArrayOutputStream();
+        PB.bytes(yxr, 2, mxr.toByteArray());            // yxr.f2 = mxr
+
+        java.io.ByteArrayOutputStream pi = new java.io.ByteArrayOutputStream();
+        pi.write(0x08); PB.varint(pi, 20);              // f1 = 20
+        pi.write(0x10); PB.varint(pi, 1);               // f2 = 1
+        pi.write((byte) 0xB2); pi.write(0x01);          // f22
+        PB.varint(pi, yxr.size()); pi.write(yxr.toByteArray(), 0, yxr.size());
+        log.log("prepareInstallApp = " + Crypto.hex(pi.toByteArray()));
+        sendEncrypted(Framing.CH_PB, pi.toByteArray());
+        long e0 = System.currentTimeMillis() + 8000;
+        while (System.currentTimeMillis() < e0) {
+            Framing.Frame f = await((byte) -1, 800);
+            if (f == null) continue;
+            if (f.type == Framing.TYPE_DATA) {
+                ack(f);
+                if (f.channel() == Framing.CH_PB) {
+                    byte[] pt = Crypto.ctr(keys.deviceKey, f.data());
+                    log.log("prepareInstallApp 应答: " + (pt == null ? "?" : Crypto.hex(pt)));
+                    break;
+                }
+            }
+        }
 
         // ① MassPrepare
         java.io.ByteArrayOutputStream iqg = new java.io.ByteArrayOutputStream();
