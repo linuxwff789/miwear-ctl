@@ -187,8 +187,8 @@ cmd_notify() {
   do_action "通知 oyt" 40 --es notify_title "$t" --es notify_text "$x" --es notify_pkg "$p"
 }
 
-# 设备状态（module 2 sub 78）
-cmd_info() { do_action "设备状态" 40 --ez query_status true; }
+# 设备状态（module 8 sub 29，含电量）
+cmd_info() { do_action "电量" 40 --ez query_status true; }
 
 # 找手表：让手表震动/响铃（module 2 sub 18）
 cmd_find() {

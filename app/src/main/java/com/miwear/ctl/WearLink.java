@@ -535,7 +535,31 @@ public class WearLink {
         return out;
     }
 
-    /** module 2 sub 78：查询设备状态。应答 oyt{f4=shr{f48=ggr{f1 bool,f2 int,f3 bool,f4 bool,f5 kgr}}} */
+    /** module 8 sub 29：查询手表状态（电量等）。应答 oyt{f10={f24={f1,f2=时间戳,f3={f1=电量%},f7}}} */
+    public byte[] deviceStatus() throws Exception {
+        byte[] pt = request(hex("0808101d5200"), 8000);
+        log.log("设备状态明文: " + (pt == null ? "(无应答)" : Crypto.hex(pt)));
+        if (pt == null) return null;
+        for (PB.F f10 : PB.parse(pt)) {
+            if (f10.field != 10 || f10.bytes == null) continue;
+            for (PB.F f24 : PB.parse(f10.bytes)) {
+                if (f24.field != 24 || f24.bytes == null) continue;
+                for (PB.F g : PB.parse(f24.bytes)) {
+                    if (g.field == 3 && g.bytes != null) {
+                        for (PB.F b : PB.parse(g.bytes))
+                            if (b.field == 1) log.log("  🔋 电量 = " + b.varint + "%");
+                    } else if (g.field == 2) {
+                        log.log("  时间戳 = " + g.varint);
+                    } else if (g.field == 7) {
+                        log.log("  f7 = " + g.varint);
+                    }
+                }
+            }
+        }
+        return pt;
+    }
+
+    /** module 2 sub 78：查询设备状态（旧接口，手表未必支持） */
     public byte[] queryStatus() throws Exception {
         byte[] pt = request(oyt(2, 78, 0, null), 8000);
         log.log("设备状态明文: " + (pt == null ? "(无应答)" : Crypto.hex(pt)));
