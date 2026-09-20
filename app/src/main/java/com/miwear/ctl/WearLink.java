@@ -357,18 +357,15 @@ public class WearLink {
         if (net == null) net = new NetProxyBridge(log, this::sendNetData);
         net.start();
         if (!net.isStarted()) return;
-        // 抓包复刻：先重放官方 App 的初始化序列，再周期性发「网络状态 + 联网能力」
-        sendHexList(NET_INIT, 200);
+        // 抓包复刻：重放官方 App 的初始化序列（官方是 25ms 级紧密发送）
+        sendHexList(NET_INIT, 40);
         new Thread(() -> {
-            try { Thread.sleep(3500); } catch (InterruptedException e) { return; }
-            for (int i = 0; i < 6; i++) {
+            for (int r = 0; r < 20; r++) {
                 try {
-                    sendNetStatus();          // module 2 sub 14 (f34.f1=1)
-                    Thread.sleep(300);
-                    sendNetCapability();      // module 18 sub 1
-                    Thread.sleep(2500);
+                    Thread.sleep(r == 0 ? 1500 : 4000);
+                    if (!net.isStarted()) return;
+                    sendHexList(NET_INIT, 40);
                 } catch (InterruptedException ignored) { return; }
-                if (!net.isStarted()) return;
             }
         }, "netproxy-hello").start();
     }
@@ -410,7 +407,7 @@ public class WearLink {
         seq++;
     }
 
-    /** 抓包复刻：官方 App 连上后发的初始化序列（手表靠这些才肯把 IP 包走手机） */
+    /** 抓包复刻：官方 App 连上后发的初始化序列（与官方抓包逐字节一致，含重复项） */
     private static final String[] NET_INIT = {
         "08021002",                          // 2/2
         "0802105c2205da03020801",            // 2/92  f58.f1=1
@@ -418,13 +415,18 @@ public class WearLink {
         "0808101e5207ca010408011003",        // 8/30
         "0805100a3a00",                      // 5/10
         "0802100e22059202020804",            // 2/14  f34.f1=4
+        "0802100e22059202020804",            // 2/14  f34.f1=4
+        "08021002",                          // 2/2
         "08021002",                          // 2/2
         "0802102c2207aa02040a020800",        // 2/44
         "08021006220aa201070a057a685f636e",  // 2/6   locale zh_cn
+        "08021002",                          // 2/2
         "0802100e22059202020802",            // 2/14  f34.f1=2
         "08141000",                          // 20/0  列应用
         "08121001a201040a02080a",            // 18/1  联网能力
+        "08021002",                          // 2/2
         "0802100e22059202020801",            // 2/14  f34.f1=1
+        "08121001a201040a02080a",            // 18/1  联网能力
     };
 
     /** 发一串明文 oyt（加密后发出） */
