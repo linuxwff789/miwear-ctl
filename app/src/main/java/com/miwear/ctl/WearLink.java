@@ -93,6 +93,11 @@ public class WearLink {
                         }
                         continue;
                     }
+                    // ⚠️ 除 ch7/ch10 外，所有 DATA 帧都必须立刻 ACK（官方 needSendAck）。
+                    // 否则手表发送窗口被未确认帧塞满，之后什么都发不过来。
+                    if (f.type == Framing.TYPE_DATA && f.channel() != 10) {
+                        try { ack(f); } catch (Exception ignored) {}
+                    }
                     // 联网模式下：解密并打印手表主动发来的包，并自动应答「支持联网吗」(module 18 sub 0)
                     if (net != null && net.isStarted() && f.type == Framing.TYPE_DATA
                             && f.channel() == Framing.CH_PB && f.opCode() == Framing.OP_WRITE_ENC && keys != null) {
@@ -192,7 +197,7 @@ public class WearLink {
         while (System.currentTimeMillis() < end) {
             Framing.Frame f = await((byte) -1, 500);
             if (f == null) continue;
-            if (f.type == Framing.TYPE_DATA && f.channel() == Framing.CH_PB) { ack(f); resp = f; break; }
+            if (f.type == Framing.TYPE_DATA && f.channel() == Framing.CH_PB) { resp = f; break; }
         }
         if (resp == null) throw new IllegalStateException("设备无应答(apiCode 26)");
         byte[] body = resp.data();
@@ -240,7 +245,7 @@ public class WearLink {
         while (System.currentTimeMillis() < end) {
             Framing.Frame f = await((byte) -1, 500);
             if (f == null) continue;
-            if (f.type == Framing.TYPE_DATA && f.channel() == Framing.CH_PB) { ack(f); c = f; break; }
+            if (f.type == Framing.TYPE_DATA && f.channel() == Framing.CH_PB) { c = f; break; }
         }
         log.log("confirm 应答: " + (c == null ? "(无)" : Crypto.hex(c.data())));
         return keys;
@@ -587,7 +592,6 @@ public class WearLink {
             Framing.Frame f = await((byte) -1, 800);
             if (f == null) continue;
             if (f.type == Framing.TYPE_DATA) {
-                ack(f);
                 if (f.channel() == Framing.CH_PB) {
                     byte[] pt = Crypto.ctr(keys.deviceKey, f.data());
                     log.log("prepareInstallApp 应答: " + (pt == null ? "?" : Crypto.hex(pt)));
@@ -620,7 +624,6 @@ public class WearLink {
             Framing.Frame f = await((byte) -1, 800);
             if (f == null) continue;
             if (f.type == Framing.TYPE_DATA) {
-                ack(f);
                 if (f.channel() == Framing.CH_PB) {
                     byte[] pt = Crypto.ctr(keys.deviceKey, f.data());
                     log.log("MassPrepare 应答明文: " + (pt == null ? "(解密失败)" : Crypto.hex(pt)));
@@ -655,7 +658,6 @@ public class WearLink {
                 Framing.Frame a = await((byte) -1, 400);
                 if (a == null) continue;
                 if (a.type == Framing.TYPE_DATA) {
-                    ack(a);
                     byte[] pt = (a.channel() == Framing.CH_PB)
                               ? Crypto.ctr(keys.deviceKey, a.data()) : null;
                     log.log("    ← 设备 DATA ch=" + a.channel() + " op=" + a.opCode()
@@ -669,7 +671,6 @@ public class WearLink {
             Framing.Frame a = await((byte) -1, 1000);
             if (a == null) continue;
             if (a.type == Framing.TYPE_DATA) {
-                ack(a);
                 byte[] pt = (a.channel() == Framing.CH_PB) ? Crypto.ctr(keys.deviceKey, a.data()) : null;
                 log.log("    ← 事后 DATA ch=" + a.channel() + " op=" + a.opCode()
                         + (pt != null ? " 明文=" + Crypto.hex(pt) : ""));
