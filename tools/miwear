@@ -5,7 +5,8 @@
 #
 # 用法:  miwear <命令> [参数]
 #   status                    体检：root/蓝牙/锁屏/官方App/手表配对/本机 App
-#   serve [start|stop|status] 启停常驻 CLI 服务（认证只做一次，后续命令秒回）
+#   serve [start|stop|status] 启停常驻 CLI 服务（后台静默，认证只做一次，后续命令秒回）
+#   serve start --quiet       同上，但不要常驻通知（可能被系统回收）
 #   rpc '<json>'               直接向常驻服务发一条 JSON 命令（调试/脚本用）
 #   install <a.rpk>           把 rpk 装到手表（自动停官方 App、自动等结果）
 #   install --build           先云构建 quickapp 再装
@@ -409,36 +410,72 @@ cmd_key() {
 }
 
 # ───────── 常驻 CLI 服务 ─────────
+# 静默启动（界面不出现）：fgs=带常驻通知（稳）/ bg=连通知都不要
+svc_start() {
+  local quiet=${1:-0} act="am start-foreground-service" extra=""
+  if [ "$quiet" = 1 ]; then act="am start-service"; extra="--ez quiet true"; fi
+  su -c "$act -n $(q "$PKG/.GatewayService") --ez serve true --ei port $(q "$PORT") --es mac $(q "$MAC") --es key $(q "$KEY") $extra" >/dev/null 2>&1
+}
+
+svc_stop() {
+  su -c "am start-service -n $(q "$PKG/.GatewayService") --ez serve_stop true" >/dev/null 2>&1
+}
+
 cmd_serve() {
   local sub=${1:-start}
   case "$sub" in
     start|up|on)
       need_root; need_app; ensure_key
+      local quiet=0
+      [ "${2:-}" = "--quiet" ] && quiet=1
       if serve_up; then ok "服务已在运行（127.0.0.1:$PORT）"; return 0; fi
-      su -c "am force-stop $PKG" 2>/dev/null
-      sleep 1
-      launch_app --es serve true --ei port "$PORT" --ez autoconnect false
+      # 白名单：避免被 Android 的 app freezer 冻结（联网时必须）
+      su -c "dumpsys deviceidle whitelist +$PKG" >/dev/null 2>&1
+      su -c "am set-standby-bucket $PKG active" >/dev/null 2>&1
+      info "静默启动中（不会拉到前台）…"
+      svc_start $quiet
       local i=0
+      while [ $i -lt 24 ]; do sleep 0.5; serve_up && break; i=$((i+1)); done
+      if serve_up; then
+        ok "CLI 服务已启动：127.0.0.1:$PORT${D}（后台静默）${N}"
+        [ $quiet = 1 ] && info "--quiet：无常驻通知（可能被系统回收，建议先加自启动/白名单）"
+        info "认证常驻，后续 miwear 命令自动走它；已开启开机自启（小米需在应用信息里允许自启动）"
+        return 0
+      fi
+      warn "静默启动失败，改用 Activity 模式（会短暂显示界面）…"
+      su -c "am force-stop $PKG" >/dev/null 2>&1; sleep 1
+      launch_app --es serve true --ei port "$PORT" --ez autoconnect false
+      i=0
       while [ $i -lt 30 ]; do sleep 0.5; serve_up && break; i=$((i+1)); done
       serve_up || { warn "服务未起来，日志："; log_dump | tail -20; die "启动失败"; }
       ok "CLI 服务已启动：127.0.0.1:$PORT"
-      info "认证常驻，后续 miwear 命令自动走它（会快很多）"
       ;;
     stop|down|off)
       need_root
-      su -c "am start -n $ACT --ez serve_stop true" >/dev/null 2>&1
-      sleep 1
-      if serve_up; then warn "还在跑？看一下 miwear log"; else ok "已停止"; fi
+      svc_stop; sleep 1
+      if serve_up; then   # 服务没在跑时上面的 start-service 可能被拦，回退 Activity
+        su -c "am start -n $ACT --ez serve_stop true" >/dev/null 2>&1; sleep 1
+      fi
+      if serve_up; then warn "还在跑？看一下 miwear log"; else ok "已停止（开机自启也已关闭）"; fi
       ;;
     status)
       if serve_up; then
         ok "运行中 127.0.0.1:$PORT"
         rpc_send '{"cmd":"state"}' 8 --raw
+        su -c "ps -A -o NAME" 2>/dev/null | grep -q "$PKG" && info "进程存活；开机自启已开启"
       else
         warn "未运行（miwear serve start）"
       fi
       ;;
-    *) die "用法: miwear serve [start|stop|status]" ;;
+    autostart)
+      need_root
+      case "${2:-}" in
+        on)  su -c "am broadcast -a com.termux.miwear.START -n $(q "$PKG/.BootReceiver") --ez serve true --es mac $(q "$MAC") --es key $(q "$KEY")" >/dev/null 2>&1; sleep 3; serve_up && ok "已启动且开机自启" || die "没起来" ;;
+        off) su -c "am broadcast -a com.termux.miwear.STOP -n $(q "$PKG/.BootReceiver")" >/dev/null 2>&1; sleep 1; serve_up && warn "还在跑" || ok "已停止且关闭开机自启" ;;
+        *)   die "用法: miwear serve autostart on|off" ;;
+      esac
+      ;;
+    *) die "用法: miwear serve [start [--quiet]|stop|status|autostart on|off]" ;;
   esac
 }
 
@@ -571,6 +608,6 @@ case "${1:-}" in
   net)       shift; cmd_net "$@" ;;
   log)       shift; cmd_log "$@" ;;
   build)     shift; cmd_build "$@" ;;
-  ""|-h|--help|help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//' ;;
+  ""|-h|--help|help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) die "未知命令: $1（试 miwear help）" ;;
 esac
