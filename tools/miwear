@@ -1,0 +1,298 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# miwear —— REDMI Watch 5 直连工具（Termux + root）
+#
+# 一条命令完成：连接认证 / 装 rpk / 列应用 / 卸载 / 启动 / 推通知 / 看日志 / 云构建
+#
+# 用法:  miwear <命令> [参数]
+#   status                          体检：root/蓝牙/锁屏/官方App/手表配对/本机 App
+#   install <a.rpk>                 把 rpk 装到手表（自动停官方 App、自动等结果）
+#   install --build [--app <dir>]   先云构建 quickapp 再装
+#   apps                            列出手表上已安装的快应用
+#   uninstall <包名> [指纹hex]      卸载（不传指纹则先自动查）
+#   launch <包名> [uri]             在手表上启动应用
+#   notify <标题> <内容> [包名]      推一条通知到手表
+#   raw <hex>                       发任意 oyt 明文（加密）并打印应答，调试用
+#   log [-n 行数] [-f]              看 App 日志（-f 持续跟随）
+#   build apk|rpk [--install]       触发 GitHub Actions 构建（apk 会自动 pm install）
+#
+# 配置:  ~/.config/miwear/config      MAC=.. / KEY=.. / REPO=..
+set -uo pipefail
+
+PKG=com.miwear.ctl
+ACT=$PKG/.MainActivity
+FILES=/data/data/$PKG/files
+LOG=$FILES/log.txt
+TMP=${TMPDIR:-/tmp}/miwear
+mkdir -p "$TMP" 2>/dev/null || TMP=/data/data/com.termux/files/home/.miwear-tmp
+mkdir -p "$TMP" 2>/dev/null || true
+
+# ───────── 配置 ─────────
+CONF=${MIWEAR_CONF:-$HOME/.config/miwear/config}
+[ -f "$CONF" ] && . "$CONF"
+MAC=${MAC:-D4:A3:65:C0:BE:EA}
+KEY=${KEY:-af994c1833f9329d0e4b083d56547e13}
+REPO=${REPO:-linuxwff789/miwear-ctl}
+
+R=$'\033[31m'; G=$'\033[32m'; Y=$'\033[33m'; C=$'\033[36m'; D=$'\033[2m'; N=$'\033[0m'
+die() { echo "${R}✗${N} $*" >&2; exit 1; }
+ok()  { echo "${G}✓${N} $*"; }
+info(){ echo "${C}·${N} $*"; }
+warn(){ echo "${Y}!${N} $*"; }
+
+# ───────── 基础 ─────────
+need_root() { su -c true 2>/dev/null || die "需要 root（su）"; }
+need_app()  { su -c "pm path $PKG" >/dev/null 2>&1 || die "$PKG 未安装，先跑: miwear build apk --install"; }
+
+# 单引号包裹，供 su -c 的 sh 使用
+q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+log_size() { su -c "stat -c %s $LOG 2>/dev/null" 2>/dev/null || echo 0; }
+
+# 从 offset 之后打印日志（过滤掉超长的帧 dump）
+log_tail() {
+  local off=$1
+  su -c "tail -c +$((off+1)) $LOG 2>/dev/null" 2>/dev/null \
+    | sed -E 's/^(→|←) (DATA|CMD) seq=[0-9]+ ch=[0-9-]+ op=[0-9-]+ len=[0-9]+ .{80,}$/\1 \2 (帧数据略)/'
+}
+
+# 等日志里出现某模式
+wait_log() {
+  local off=$1 pat=$2 t=${3:-60} i=0
+  while [ $i -lt $((t*2)) ]; do
+    if log_tail "$off" | grep -qE "$pat"; then return 0; fi
+    if log_tail "$off" | grep -qE "❌|连接异常|未认证|设备无应答"; then return 1; fi
+    sleep 0.5; i=$((i+1))
+  done
+  return 1
+}
+
+# 启动一次带参数的 App（先记 offset，返回 offset 到 stdout）
+launch_app() {
+  local off; off=$(log_size)
+  local args=(-n "$ACT" --es mac "$MAC" --es key "$KEY" --ez autoconnect true --ez autoauth true)
+  args+=("$@")
+  local cmd="am start"; local a
+  for a in "${args[@]}"; do cmd="$cmd $(q "$a")"; done
+  su -c "$cmd" >/dev/null 2>&1 || die "am start 失败"
+  echo "$off"
+}
+
+# 通用的「跑一次动作并等结果」（失败自动重试一次：SPP 连接偶发失败）
+# 每次先 force-stop 自己的 App，保证 onCreate 拿到干净 Intent、日志也是新的
+do_action() {
+  local pat=$1 t=$2; shift 2
+  need_root; need_app
+  local attempt
+  for attempt in 1 2; do
+    su -c "am force-stop com.mi.health; am force-stop $PKG" 2>/dev/null
+    sleep 0.5
+    launch_app "$@" >/dev/null
+    if wait_log 0 "$pat" "$t"; then log_tail 0; return 0; fi
+    if [ $attempt -eq 1 ]; then
+      warn "第一次没成功，重试…"
+      if [ "${MIWEAR_BTRESET:-0}" = 1 ]; then
+        info "重启蓝牙清残留连接…"
+        su -c "svc bluetooth disable" 2>/dev/null; sleep 3; su -c "svc bluetooth enable" 2>/dev/null; sleep 8
+      else
+        sleep 2
+      fi
+    fi
+  done
+  warn "失败，日志如下："; log_tail 0; return 1
+}
+
+# ───────── status ─────────
+cmd_status() {
+  need_root
+  echo "── miwear 体检 ──"
+  su -c "id -u" 2>/dev/null | grep -q '^0$' && ok "root" || die "无 root"
+  su -c "dumpsys bluetooth_manager" 2>/dev/null | grep -q "state: ON" && ok "蓝牙已开" || warn "蓝牙未开"
+  local lock; lock=$(su -c "dumpsys window" 2>/dev/null | grep -oE 'mDreamingLockscreen=(true|false)' | head -1)
+  case "$lock" in *false) ok "手机已解锁" ;; *true) warn "手机锁屏中（am start 仍可用，但建议解锁）" ;; esac
+  su -c "dumpsys bluetooth_manager" 2>/dev/null | grep -q "$MAC" && ok "手表已配对 ($MAC)" || warn "未找到配对的手表 $MAC"
+  su -c "pm path $PKG" >/dev/null 2>&1 && ok "miwear-ctl 已安装" || warn "miwear-ctl 未安装 → miwear build apk --install"
+  su -c "ps -A" 2>/dev/null | grep -q com.mi.health \
+    && warn "小米运动健康正在运行（会在推送时自动停掉）" || ok "官方 App 未运行（SPP 通道空闲）"
+  info "配置：MAC=$MAC  KEY=${KEY:0:8}…  REPO=$REPO"
+}
+
+# ───────── install ─────────
+cmd_install() {
+  local rpk=""
+  if [ "${1:-}" = "--build" ]; then
+    shift; cmd_build rpk "$@"
+    rpk=$(ls -t "$HOME/miwear-ctl/dist/"*.rpk 2>/dev/null | head -1)
+    [ -n "$rpk" ] || die "构建后没找到 rpk"
+  else
+    rpk=${1:-}; [ -n "$rpk" ] || die "用法: miwear install <a.rpk>"
+  fi
+  [ -f "$rpk" ] || die "文件不存在: $rpk"
+
+  need_root; need_app
+  mkdir -p "$TMP"; local base; base=$(basename "$rpk")
+  su -c "cp $(q "$rpk") $FILES/$base && chmod 644 $FILES/$base" || die "拷贝 rpk 失败"
+  info "安装 $base ($(stat -c %s "$rpk") 字节)"
+
+  su -c "am force-stop com.mi.health; am force-stop $PKG" 2>/dev/null
+  sleep 0.5
+  launch_app --es install_rpk "$FILES/$base" >/dev/null
+  if wait_log 0 "rpk 发送完成|❌" 90; then
+    log_tail 0
+    echo
+    ok "已发送完成。${D}注意：设备对安装只回 L1 ACK，没有「安装成功」回执属正常——看一眼手表即可${N}"
+  else
+    warn "超时，日志如下："; log_tail 0
+  fi
+}
+
+# ───────── apps ─────────
+cmd_apps() {
+  do_action "共 [0-9]+ 个应用" 40 --ez list_apps true
+}
+
+# ───────── uninstall ─────────
+cmd_uninstall() {
+  local pkg=${1:-}; [ -n "$pkg" ] || die "用法: miwear uninstall <包名> [指纹hex]"
+  local fp=${2:-}
+  if [ -z "$fp" ]; then
+    info "未给指纹，先查应用列表…"
+    local out; out=$(do_action "共 [0-9]+ 个应用" 40 --ez list_apps true)
+    echo "$out"
+    fp=$(echo "$out" | grep -oE "• $pkg .*fp=[0-9a-f]+" | grep -oE "fp=[0-9a-f]+" | cut -d= -f2 | head -1)
+    [ -n "$fp" ] || die "没找到 $pkg 的指纹（先跑 miwear apps 看看）"
+    info "指纹 = $fp"
+  fi
+  do_action "卸载应答" 40 --es uninstall_pkg "$pkg" --es uninstall_fp "$fp"
+}
+
+# ───────── launch ─────────
+cmd_launch() {
+  local pkg=${1:-}; [ -n "$pkg" ] || die "用法: miwear launch <包名> [uri]"
+  local uri=${2:-}
+  if [ -n "$uri" ]; then
+    do_action "启动应答" 40 --es launch_pkg "$pkg" --es launch_uri "$uri"
+  else
+    do_action "启动应答" 40 --es launch_pkg "$pkg"
+  fi
+}
+
+# ───────── notify ─────────
+cmd_notify() {
+  local t=${1:-}; local x=${2:-}; local p=${3:-com.termux}
+  [ -n "$t" ] || die "用法: miwear notify <标题> <内容> [包名]"
+  do_action "通知 oyt" 40 --es notify_title "$t" --es notify_text "$x" --es notify_pkg "$p"
+}
+
+# ───────── raw ─────────
+cmd_raw() {
+  local h=${1:-}; [ -n "$h" ] || die "用法: miwear raw <oyt的hex>"
+  do_action "应答明文" 40 --es raw_hex "$h"
+}
+
+# ───────── log ─────────
+cmd_log() {
+  need_root
+  local n=60 follow=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -n) n=$2; shift 2 ;;
+      -f) follow=1; shift ;;
+      *) shift ;;
+    esac
+  done
+  su -c "test -f $LOG" 2>/dev/null || die "还没有日志"
+  if [ $follow -eq 1 ]; then
+    info "跟随日志（Ctrl-C 退出）…"
+    su -c "tail -f $LOG" | sed -E 's/^(→|←) (DATA|CMD) seq=[0-9]+ ch=[0-9-]+ op=[0-9-]+ len=[0-9]+ .{80,}$/\1 \2 (帧数据略)/'
+  else
+    log_tail 0 | tail -n "$n"
+  fi
+}
+
+# ───────── build ─────────
+token() { sed -nE 's#https://[^:]*:([^@]*)@github.com.*#\1#p' "$HOME/.git-credentials" 2>/dev/null | head -1; }
+
+gh_api() { curl -s -m 30 -H "Authorization: token $(token)" -H "Accept: application/vnd.github+json" "$@"; }
+
+cmd_build() {
+  local kind=${1:-apk}; shift || true
+  local do_install=0
+  for a in "$@"; do [ "$a" = "--install" ] && do_install=1; done
+
+  local wf artifact
+  case "$kind" in
+    apk) wf=build.yml;    artifact=miwear-ctl-apk ;;
+    rpk) wf=quickapp.yml; artifact=quickapp-rpk ;;
+    *) die "用法: miwear build apk|rpk [--install]" ;;
+  esac
+  local tk; tk=$(token); [ -n "$tk" ] || die "没找到 GitHub token（~/.git-credentials）"
+
+  info "触发 $wf …"
+  curl -s -m 30 -X POST -H "Authorization: token $tk" -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/$REPO/actions/workflows/$wf/dispatches" \
+    -d '{"ref":"main"}' -w "http=%{http_code}\n" -o /dev/null || die "dispatch 失败"
+
+  info "等待构建…"
+  local rid="" i s
+  for i in $(seq 1 60); do
+    sleep 10
+    s=$(gh_api "https://api.github.com/repos/$REPO/actions/runs?per_page=5" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for r in d.get('workflow_runs',[]):
+    if r['path'].endswith('$wf'):
+        print(r['id'], r['status'], r.get('conclusion') or '-'); break
+")
+    echo "  ${D}$s${N}"
+    case "$s" in *completed\ success*) rid=$(echo "$s" | awk '{print $1}'); break ;;
+                  *completed*) die "构建失败：https://github.com/$REPO/actions" ;;
+    esac
+  done
+  [ -n "$rid" ] || die "构建超时"
+
+  info "下载产物 $artifact …"
+  mkdir -p "$HOME/miwear-ctl/dist"
+  local aid
+  aid=$(gh_api "https://api.github.com/repos/$REPO/actions/runs/$rid/artifacts" \
+        | python3 -c "import json,sys;print(json.load(sys.stdin)['artifacts'][0]['id'])")
+  curl -sL -m 180 -H "Authorization: token $tk" \
+    "https://api.github.com/repos/$REPO/actions/artifacts/$aid/zip" -o "$TMP/art.zip" || die "下载失败"
+  rm -rf "$TMP/art"; mkdir -p "$TMP/art"
+  unzip -o -q "$TMP/art.zip" -d "$TMP/art" || die "解压失败"
+
+  if [ "$kind" = rpk ]; then
+    local f; f=$(find "$TMP/art" -name '*.rpk' | head -1)
+    [ -n "$f" ] || die "产物里没有 rpk"
+    cp "$f" "$HOME/miwear-ctl/dist/"; ok "rpk → ~/miwear-ctl/dist/$(basename "$f")"
+    [ $do_install -eq 1 ] && cmd_install "$HOME/miwear-ctl/dist/$(basename "$f")"
+  else
+    local f; f=$(find "$TMP/art" -name '*.apk' | head -1)
+    [ -n "$f" ] || die "产物里没有 apk"
+    if [ $do_install -eq 1 ]; then
+      need_root
+      su -c "cp $(q "$f") /data/local/tmp/miwear.apk && chmod 644 /data/local/tmp/miwear.apk"
+      su -c "pm install -r /data/local/tmp/miwear.apk" 2>&1 | tail -2
+      su -c "pm grant $PKG android.permission.POST_NOTIFICATIONS" 2>/dev/null
+      ok "APK 已安装"
+    else
+      ok "apk → $f"
+    fi
+  fi
+}
+
+# ───────── 入口 ─────────
+case "${1:-}" in
+  status)    shift; cmd_status "$@" ;;
+  install)   shift; cmd_install "$@" ;;
+  apps)      shift; cmd_apps "$@" ;;
+  uninstall) shift; cmd_uninstall "$@" ;;
+  launch)    shift; cmd_launch "$@" ;;
+  notify)    shift; cmd_notify "$@" ;;
+  raw)       shift; cmd_raw "$@" ;;
+  log)       shift; cmd_log "$@" ;;
+  build)     shift; cmd_build "$@" ;;
+  ""|-h|--help|help)
+    sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+  *) die "未知命令: $1（试 miwear help）" ;;
+esac

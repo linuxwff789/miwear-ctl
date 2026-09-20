@@ -314,6 +314,101 @@ public class WearLink {
         sendEncrypted(Framing.CH_PB, oyt.toByteArray());
     }
 
+    // ───────────────── 应用管理（module 20）─────────────────
+
+    /** 组一条 oyt：f1=module, f2=sub，可选 payload 放在 payloadField */
+    private static byte[] oyt(int module, int sub, int payloadField, byte[] payload) {
+        ByteArrayOutputStream o = new ByteArrayOutputStream();
+        o.write(0x08); PB.varint(o, module);
+        o.write(0x10); PB.varint(o, sub);
+        if (payload != null && payloadField > 0) PB.bytes(o, payloadField, payload);
+        return o.toByteArray();
+    }
+
+    /** 发一条加密 oyt 并等 PB 应答，返回解密后的明文（超时返回 null） */
+    public byte[] request(byte[] body, long timeoutMs) throws Exception {
+        if (keys == null) throw new IllegalStateException("未认证");
+        sendEncrypted(Framing.CH_PB, body);
+        long end = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < end) {
+            Framing.Frame f = await((byte) -1, 500);
+            if (f == null) continue;
+            if (f.type == Framing.TYPE_DATA) {
+                ack(f);
+                if (f.channel() == Framing.CH_PB) return Crypto.ctr(keys.deviceKey, f.data());
+            }
+        }
+        return null;
+    }
+
+    /** 发任意 oyt（hex 字节）并打印应答 —— 调试用 */
+    public byte[] rawCall(byte[] body, long timeoutMs) throws Exception {
+        byte[] pt = request(body, timeoutMs);
+        log.log("应答明文: " + (pt == null ? "(无)" : Crypto.hex(pt)));
+        return pt;
+    }
+
+    /** rxr{f1=包名, f2=指纹} */
+    private static byte[] rxr(String pkg, byte[] fp) {
+        ByteArrayOutputStream o = new ByteArrayOutputStream();
+        PB.str(o, 1, pkg);
+        if (fp != null && fp.length > 0) PB.bytes(o, 2, fp);
+        return o.toByteArray();
+    }
+
+    /** module 20 sub 0：列出已安装快应用。每项 = [包名, 版本, 指纹hex, 备注] */
+    public List<String[]> listApps() throws Exception {
+        byte[] pt = request(oyt(20, 0, 0, null), 8000);
+        List<String[]> out = new ArrayList<>();
+        if (pt == null) { log.log("应用列表：设备无应答"); return out; }
+        log.log("应用列表明文: " + Crypto.hex(pt));
+        for (PB.F f : PB.parse(pt)) {
+            if (f.field != 22 || f.bytes == null) continue;          // oyt.f22 = yxr
+            for (PB.F y : PB.parse(f.bytes)) {
+                if (y.field != 1 || y.bytes == null) continue;       // yxr.f1 = pxr.a
+                for (PB.F p : PB.parse(y.bytes)) {                   // pxr.a.f1 = repeated pxr
+                    if (p.field != 1 || p.bytes == null) continue;
+                    String pkg = "?", note = ""; int ver = 0; boolean on = false; byte[] fp = null;
+                    for (PB.F g : PB.parse(p.bytes)) {
+                        if (g.field == 1 && g.bytes != null) pkg = new String(g.bytes, "UTF-8");
+                        else if (g.field == 2) fp = g.bytes;
+                        else if (g.field == 3) ver = (int) g.varint;
+                        else if (g.field == 4) on = g.varint != 0;
+                        else if (g.field == 5 && g.bytes != null) note = new String(g.bytes, "UTF-8");
+                    }
+                    out.add(new String[]{ pkg, String.valueOf(ver),
+                                          fp == null ? "" : Crypto.hex(fp), on ? "运行中" : "" });
+                    log.log("  • " + pkg + "  v" + ver + (on ? "  [运行中]" : "")
+                            + (fp == null ? "" : "  fp=" + Crypto.hex(fp))
+                            + (note.isEmpty() ? "" : "  " + note));
+                }
+            }
+        }
+        log.log("共 " + out.size() + " 个应用");
+        return out;
+    }
+
+    /** module 20 sub 3：卸载（fp 可为 null） */
+    public boolean uninstall(String pkg, byte[] fp) throws Exception {
+        ByteArrayOutputStream y = new ByteArrayOutputStream();
+        PB.bytes(y, 5, rxr(pkg, fp));                    // yxr.f5 = rxr
+        byte[] pt = request(oyt(20, 3, 22, y.toByteArray()), 8000);
+        log.log("卸载应答: " + (pt == null ? "(无)" : Crypto.hex(pt)));
+        return pt != null;
+    }
+
+    /** module 20 sub 4：启动应用 */
+    public boolean launchApp(String pkg, String uri) throws Exception {
+        ByteArrayOutputStream uxr = new ByteArrayOutputStream();
+        PB.bytes(uxr, 1, rxr(pkg, null));                // uxr.f1 = rxr
+        if (uri != null && !uri.isEmpty()) PB.str(uxr, 2, uri);
+        ByteArrayOutputStream y = new ByteArrayOutputStream();
+        PB.bytes(y, 6, uxr.toByteArray());               // yxr.f6 = uxr
+        byte[] pt = request(oyt(20, 4, 22, y.toByteArray()), 6000);
+        log.log("启动应答: " + (pt == null ? "(无)" : Crypto.hex(pt)));
+        return pt != null;
+    }
+
     // ───────────────── 应用安装（.rpk 侧载）─────────────────
     /**
      * 协议逆向自 MassDataHandler / MassDataDispatcher / RunningMassManager：

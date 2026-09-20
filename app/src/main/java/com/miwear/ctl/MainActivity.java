@@ -137,6 +137,7 @@ public class MainActivity extends Activity implements WearLink.Log {
     /** 处理启动参数；singleTask 下 am start 走 onNewIntent，必须也走这里 */
     private void handleIntent(android.content.Intent it) {
         if (it == null) return;
+        log("Intent extras: " + it.getExtras());
         String m = it.getStringExtra("mac");
         String k = it.getStringExtra("key");
         if (m != null) etMac.setText(m);
@@ -166,6 +167,17 @@ public class MainActivity extends Activity implements WearLink.Log {
                             link.installRpk(data, f.getName());
                             return;
                         }
+                        if (it.getBooleanExtra("list_apps", false)) { link.listApps(); return; }
+                        String up = it.getStringExtra("uninstall_pkg");
+                        if (up != null) {
+                            String fpH = it.getStringExtra("uninstall_fp");
+                            link.uninstall(up, fpH == null ? null : hex2(fpH));
+                            return;
+                        }
+                        String lp = it.getStringExtra("launch_pkg");
+                        if (lp != null) { link.launchApp(lp, it.getStringExtra("launch_uri")); return; }
+                        String raw = it.getStringExtra("raw_hex");
+                        if (raw != null) { link.rawCall(hex2(raw), 8000); return; }
                         String nt = it.getStringExtra("notify_title");
                         if (nt != null) {
                             Thread.sleep(1500);
