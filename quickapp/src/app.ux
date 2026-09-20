@@ -1,0 +1,8 @@
+<script>
+export default {
+  onCreate() { console.log('[app] onCreate'); },
+  onShow() { console.log('[app] onShow'); },
+  onHide() { console.log('[app] onHide'); },
+  onDestroy() { console.log('[app] onDestroy'); }
+}
+</script>

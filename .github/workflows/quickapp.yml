@@ -1,0 +1,47 @@
+name: Build QuickApp RPK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'quickapp/**'
+      - '.github/workflows/quickapp.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: quickapp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install aiot-toolkit
+        run: |
+          npm install --no-audit --no-fund 2>&1 | tail -20
+
+      - name: Show aiot help
+        run: npx aiot --help || true
+
+      - name: Build (release, signed)
+        run: |
+          npx aiot release 2>&1 | tail -60 || npx aiot build 2>&1 | tail -60
+
+      - name: Locate outputs
+        run: |
+          echo "=== 找 rpk ==="
+          find . -name '*.rpk' -not -path './node_modules/*' -exec ls -l {} \;
+          echo "=== dist/release 目录 ==="
+          ls -laR dist release 2>/dev/null | head -40
+
+      - name: Upload RPK
+        uses: actions/upload-artifact@v4
+        with:
+          name: quickapp-rpk
+          path: |
+            quickapp/**/*.rpk
+          if-no-files-found: error

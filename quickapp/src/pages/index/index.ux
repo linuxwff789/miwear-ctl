@@ -1,0 +1,167 @@
+<template>
+  <div class="page">
+    <div class="card">
+      <text class="title">MiWear Demo</text>
+      <text class="sub">{{ subtitle }}</text>
+    </div>
+
+    <div class="card center">
+      <text class="counter">{{ count }}</text>
+      <text class="hint">点击下面按钮 +1 并震动</text>
+    </div>
+
+    <div class="row">
+      <div class="btn primary" @click="onTap">
+        <text class="btn-text">+1 震动</text>
+      </div>
+      <div class="btn" @click="onReset">
+        <text class="btn-text">重置</text>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="btn" @click="onBright">
+        <text class="btn-text">调亮度</text>
+      </div>
+      <div class="btn" @click="onInfo">
+        <text class="btn-text">设备信息</text>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+import vibrator from '@system.vibrator'
+import brightness from '@system.brightness'
+import device from '@system.device'
+import prompt from '@system.prompt'
+
+export default {
+  data: {
+    count: 0,
+    subtitle: '自制快应用 · 直连安装',
+    bright: 0
+  },
+
+  onInit() {
+    console.log('[page] onInit')
+  },
+
+  onReady() {
+    console.log('[page] onReady')
+    try {
+      const info = device.getInfoSync ? device.getInfoSync() : {}
+      this.subtitle = (info.brand || 'Vela') + ' ' + (info.model || 'Watch')
+    } catch (e) {
+      console.log('getInfo failed: ' + e)
+    }
+  },
+
+  onTap() {
+    this.count = this.count + 1
+    try {
+      vibrator.vibrate({ mode: 'long' })
+    } catch (e) {
+      console.log('vibrate failed: ' + e)
+    }
+  },
+
+  onReset() {
+    this.count = 0
+  },
+
+  onBright() {
+    // 0..255 循环
+    this.bright = this.bright >= 200 ? 40 : this.bright + 60
+    try {
+      brightness.setValue({ value: this.bright })
+      prompt.showToast({ message: '亮度 ' + this.bright })
+    } catch (e) {
+      console.log('brightness failed: ' + e)
+    }
+  },
+
+  onInfo() {
+    let s = ''
+    try {
+      const info = device.getInfoSync ? device.getInfoSync() : {}
+      s = JSON.stringify(info)
+    } catch (e) {
+      s = '读取失败'
+    }
+    console.log('[device] ' + s)
+    prompt.showToast({ message: s.slice(0, 80) })
+  }
+}
+</script>
+
+<style>
+.page {
+  flex-direction: column;
+  width: 480px;
+  height: 480px;
+  padding: 16px;
+  background-color: #000000;
+}
+
+.card {
+  flex-direction: column;
+  padding: 14px;
+  margin-bottom: 12px;
+  border-radius: 12px;
+  background-color: #1c1c1e;
+}
+
+.center {
+  align-items: center;
+  justify-content: center;
+}
+
+.title {
+  font-size: 34px;
+  color: #ffffff;
+  font-weight: bold;
+}
+
+.sub {
+  font-size: 20px;
+  color: #8e8e93;
+  margin-top: 6px;
+}
+
+.counter {
+  font-size: 72px;
+  color: #ffa626;
+  font-weight: bold;
+}
+
+.hint {
+  font-size: 18px;
+  color: #8e8e93;
+}
+
+.row {
+  flex-direction: row;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.btn {
+  flex: 1;
+  height: 76px;
+  margin: 0 6px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background-color: #2c2c2e;
+}
+
+.primary {
+  background-color: #ffa626;
+}
+
+.btn-text {
+  font-size: 24px;
+  color: #ffffff;
+}
+</style>
