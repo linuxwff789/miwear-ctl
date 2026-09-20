@@ -10,7 +10,8 @@ tools/miwear apps                         # 列出手表上已安装的快应用
 tools/miwear app com.miwear.demo          # 查某个应用在手表上的状态
 tools/miwear uninstall com.miwear.demo    # 卸载（自动查指纹；设备不回执）
 tools/miwear launch com.miwear.demo       # 在手表上启动
-tools/miwear notify "标题" "内容"          # 推通知到手表
+tools/miwear notify "标题" "内容"          # 推普通通知（短震动）
+tools/miwear call 10086 中国移动            # 模拟来电（长震动/来电界面）
 tools/miwear info                         # 手表状态（电量，module 8/29）
 tools/miwear find                         # 找手表：让手表震动/响铃（module 2/18）
 tools/miwear sync com.miwear.demo 1       # 同步手机 App 安装状态（module 20/7）
@@ -49,11 +50,29 @@ REPO=linuxwff789/miwear-ctl
 App 内部完成 SPP 连接 → 认证 → 执行动作，日志写在
 `/data/data/com.miwear.ctl/files/log.txt`，脚本负责等待与展示。
 
+## 通知 / 来电（module 7 sub 0）
+
+两种都走同一通道，用 `lli` 字段区分：
+
+| 字段 | 普通通知 | 来电 |
+|---|---|---|
+| f1 包名 | 真实包名 | **"phone"**（`Constant.INCOMING_CALL_PACKAGE_NAME`）|
+| f3 / f5 | 标题 / 内容 | 姓名 / 号码 |
+| f7 | 通知 id | **0**（`INCOMING_CALL_UID`）|
+| **f8** | 不填 | **callType**（1=来电 2=去电 3=未接）|
+| f11 | 不填 | true |
+| **f16** | **绝不能填** | **true** ← 实测手表就是靠它进「来电模式」|
+
+⚠️ **坑**：之前把 `f16` 一直设 true，导致**普通通知也按来电长震动**。官方源码里
+`f16` 只在 `isWeChatIncomingCall` 时置 true（`BaseNotifySyncService` 的 `lliVar.p = true`）。
+
+时间字段 f6 官方格式是 `yyyyMMdd'T'HHmmss`。
+
 ## 已实现的官方 App 能力对照
 
 | 官方能力 | oyt | 我们的命令 | 状态 |
 |---|---|---|---|
-| 通知推送 | `7/0` | `notify` | ✅ |
+| 通知推送 | `7/0` | `notify`（短震）/ `call`（来电） | ✅ |
 | 列表/查询/安装/卸载/启动应用 | `20/0,21,1,3,4` | `apps` `app` `install` `uninstall` `launch` | ✅ |
 | rpk 传输 | `22/0` + MASS ch2 | `install` | ✅ |
 | 手表联网（手机做网关） | `18/1` + ch7 | `net` | ✅ |
