@@ -358,7 +358,7 @@ public class WearLink {
 
     /** module 20 sub 0：列出已安装快应用。每项 = [包名, 版本, 指纹hex, 备注] */
     public List<String[]> listApps() throws Exception {
-        byte[] pt = request(oyt(20, 0, 0, null), 8000);
+        byte[] pt = request(oyt(20, 0, 0, null), 25000);
         List<String[]> out = new ArrayList<>();
         if (pt == null) { log.log("应用列表：设备无应答"); return out; }
         log.log("应用列表明文: " + Crypto.hex(pt));
@@ -388,7 +388,16 @@ public class WearLink {
         return out;
     }
 
-    /** module 20 sub 3：卸载（fp 可为 null） */
+    /** module 20 sub 21：查询某个应用在手表上的状态 */
+    public byte[] appStatus(String pkg) throws Exception {
+        ByteArrayOutputStream y = new ByteArrayOutputStream();
+        PB.bytes(y, 5, rxr(pkg, null));                  // yxr.f5 = rxr
+        byte[] pt = request(oyt(20, 21, 22, y.toByteArray()), 15000);
+        log.log("应用状态应答: " + (pt == null ? "(无)" : Crypto.hex(pt)));
+        return pt;
+    }
+
+    /** module 20 sub 3：卸载（fp 可为 null）。设备不回执，属正常 */
     public boolean uninstall(String pkg, byte[] fp) throws Exception {
         ByteArrayOutputStream y = new ByteArrayOutputStream();
         PB.bytes(y, 5, rxr(pkg, fp));                    // yxr.f5 = rxr
@@ -397,7 +406,7 @@ public class WearLink {
         return pt != null;
     }
 
-    /** module 20 sub 4：启动应用 */
+    /** module 20 sub 4：启动应用。设备不回执，属正常 */
     public boolean launchApp(String pkg, String uri) throws Exception {
         ByteArrayOutputStream uxr = new ByteArrayOutputStream();
         PB.bytes(uxr, 1, rxr(pkg, null));                // uxr.f1 = rxr

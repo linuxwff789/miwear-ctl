@@ -138,6 +138,8 @@ public class MainActivity extends Activity implements WearLink.Log {
     private void handleIntent(android.content.Intent it) {
         if (it == null) return;
         log("Intent extras: " + it.getExtras());
+        String runId = it.getStringExtra("run_id");
+        if (runId != null) log("RUN " + runId);   // 供外部脚本识别「本次运行」
         String m = it.getStringExtra("mac");
         String k = it.getStringExtra("key");
         if (m != null) etMac.setText(m);
@@ -178,6 +180,8 @@ public class MainActivity extends Activity implements WearLink.Log {
                         if (lp != null) { link.launchApp(lp, it.getStringExtra("launch_uri")); return; }
                         String raw = it.getStringExtra("raw_hex");
                         if (raw != null) { link.rawCall(hex2(raw), 8000); return; }
+                        String ap = it.getStringExtra("app_pkg");
+                        if (ap != null) { link.appStatus(ap); return; }
                         String nt = it.getStringExtra("notify_title");
                         if (nt != null) {
                             Thread.sleep(1500);
