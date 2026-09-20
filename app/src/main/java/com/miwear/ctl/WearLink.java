@@ -350,7 +350,8 @@ public class WearLink {
 
         // 字段表逆向自 BaseNotifySyncService.handleNotificationPosted（权威）
         String key = "0|" + pkg + "|" + id + "|null|1000";
-        String time = new java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US)
+        // 官方两种通知都用这个格式（BleNotifyModel / BaseNotifySyncService 的 SimpleDateFormat）
+        String time = new java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss", java.util.Locale.ENGLISH)
                           .format(new java.util.Date());
 
         ByteArrayOutputStream lli = new ByteArrayOutputStream();
@@ -379,7 +380,7 @@ public class WearLink {
         if (number == null || number.isEmpty()) { title = "未知号码"; text = ""; }
         else if (displayName == null || displayName.isEmpty()) { title = number; text = ""; }
         else { title = displayName; text = number; }
-        String time = new java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US)
+        String time = new java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss", java.util.Locale.ENGLISH)
                           .format(new java.util.Date());
 
         ByteArrayOutputStream lli = new ByteArrayOutputStream();
