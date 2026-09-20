@@ -93,6 +93,25 @@ public class WearLink {
                         }
                         continue;
                     }
+                    // 联网模式下：解密并打印手表主动发来的包，并自动应答「支持联网吗」(module 18 sub 0)
+                    if (net != null && net.isStarted() && f.type == Framing.TYPE_DATA
+                            && f.channel() == Framing.CH_PB && f.opCode() == Framing.OP_WRITE_ENC && keys != null) {
+                        byte[] pt = Crypto.ctr(keys.deviceKey, f.data());
+                        if (pt != null) {
+                            log.log("← ch1 明文 " + Crypto.hex(pt));
+                            for (PB.F g : PB.parse(pt)) {
+                                if (g.field == 1 && g.varint == 18) {   // module 18
+                                    long sub = 0;
+                                    for (PB.F h : PB.parse(pt)) if (h.field == 2) sub = h.varint;
+                                    if (sub == 0) {
+                                        log.log("↩ 手表问联网能力，回 module18 sub1");
+                                        sendNetCapability();
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     synchronized (queue) {
                         log.log("← " + f + (f.seq == (byte) 0xEE ? "   [CRC 错!]" : ""));
                         queue.add(f);
@@ -333,10 +352,29 @@ public class WearLink {
         if (net == null) net = new NetProxyBridge(log, this::sendNetData);
         net.start();
     }
-
     public void stopNetProxy() { if (net != null) net.stop(); }
 
     public boolean netProxyRunning() { return net != null && net.isStarted(); }
+
+    /** 告诉手表「我支持联网」：module 18 sub 1（抓包复刻：oyt{f1=18,f2=1,f20={f1={f1=10}}}） */
+    public void sendNetCapability() {
+        try {
+            ByteArrayOutputStream x = new ByteArrayOutputStream();
+            x.write(0x08); PB.varint(x, 10);                 // x5h.f1 = {f1: 10}
+            sendEncrypted(Framing.CH_PB, oyt(18, 1, 20, x.toByteArray()));
+        } catch (Exception e) { log.log("❌ 回联网能力失败: " + e); }
+    }
+
+    /** 告诉手表网络状态（抓包里的 module 2 sub 14：oyt{f1=2,f2=14,f4={f34={f1=1}}}） */
+    public void sendNetStatus() {
+        try {
+            ByteArrayOutputStream a = new ByteArrayOutputStream();
+            a.write(0x08); PB.varint(a, 1);
+            ByteArrayOutputStream b = new ByteArrayOutputStream();
+            PB.bytes(b, 34, a.toByteArray());
+            sendEncrypted(Framing.CH_PB, oyt(2, 14, 4, b.toByteArray()));
+        } catch (Exception e) { log.log("❌ 发网络状态失败: " + e); }
+    }
 
     /** 把一个 IP 包发回手表（明文，通道 7） */
     private void sendNetData(byte[] ip) throws Exception {
