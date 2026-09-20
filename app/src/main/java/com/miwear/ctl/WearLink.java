@@ -271,13 +271,15 @@ public class WearLink {
         return null;
     }
 
-    /** jd0Var：app 信息（字段号逆向自 WearAuthV2，值可后续校准） */
+    /** jd0Var：app 信息（字段号/类型逆向自抓包：f2 是 float、f4 是版本号） */
     private byte[] buildAppInfo() {
         ByteArrayOutputStream o = new ByteArrayOutputStream();
         o.write(0x08); o.write(0x00);                       // f1 = 0
-        o.write(0x10); PB.varint(o, android.os.Build.VERSION.SDK_INT);   // f2 = SDK
+        o.write(0x15);                                      // f2 = float(34.0)（官方是 fixed32 不是 varint！）
+        o.write(0x00); o.write(0x00); o.write(0x08); o.write(0x42);
         PB.str(o, 3, android.os.Build.MODEL);               // f3 = 机型
-        PB.str(o, 4, "CN");                                 // f4 = 区域
+        o.write(0x20); PB.varint(o, 25237220L);             // f4 = 版本号
+        PB.str(o, 5, "CN");                                 // f5 = 区域
         return o.toByteArray();
     }
 
