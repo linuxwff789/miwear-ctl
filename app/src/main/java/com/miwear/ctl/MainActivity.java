@@ -170,8 +170,7 @@ public class MainActivity extends Activity implements WearLink.Log {
                         .putExtra("mac", etMac.getText().toString().trim())
                         .putExtra("key", etKey.getText().toString().trim());
                 if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(si); else startService(si);
-                log(CmdServer.isRunning() ? ("✅ CLI 服务已在 127.0.0.1:" + CmdServer.runningPort())
-                                          : "⚠ CLI 服务未起来（端口占用？）");
+                log("已请求启动 CLI 服务（127.0.0.1:" + port + "）");
             } catch (Exception e) { log("❌ 启动 CLI 服务失败: " + e); }
             return;
         }

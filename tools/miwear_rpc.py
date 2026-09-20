@@ -167,34 +167,39 @@ def main():
                 continue
             if opts["raw"]:
                 print(line, flush=True)
-                continue
             try:
                 ev = json.loads(line)
             except Exception:
-                print(line, flush=True)
+                if not opts["raw"]:
+                    print(line, flush=True)
                 continue
             kind = ev.get("ev")
             if kind == "log":
+                if opts["raw"]:
+                    continue
                 msg = ev.get("msg", "")
                 if FRAME_RE.match(msg):
                     msg = FRAME_RE.sub(r"\1 \2 (帧数据略)", msg)
                 print(msg, flush=True)
             elif kind == "done":
-                msg = ev.get("error")
-                if msg:
-                    sys.stderr.write(" %s\n" % msg)
-                elif "data" in ev and ev["data"]:
-                    print(ev["data"], flush=True)
+                if not opts["raw"]:
+                    if ev.get("error"):
+                        sys.stderr.write(" %s\n" % ev["error"])
+                    elif "data" in ev and ev["data"]:
+                        print(ev["data"], flush=True)
+                    else:
+                        extra = {k: v for k, v in ev.items()
+                                 if k not in ("ev", "ok", "keep", "bye")}
+                        if extra:
+                            print(" ".join("%s=%s" % (k, v) for k, v in extra.items()), flush=True)
                 rc = 0 if ev.get("ok") else 1
                 done = True
                 if not opts["follow"]:
                     s.close()
                     return rc
-            elif kind == "hello":
+            elif kind in ("hello", "pong"):
                 pass
-            elif kind == "pong":
-                pass
-            else:
+            elif not opts["raw"]:
                 print(line, flush=True)
         if done and not opts["follow"]:
             break

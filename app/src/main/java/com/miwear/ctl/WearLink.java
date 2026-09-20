@@ -641,9 +641,23 @@ public class WearLink {
 
     /** module 8 sub 29：查询手表状态（电量等）。应答 oyt{f10={f24={f1,f2=时间戳,f3={f1=电量%},f7}}} */
     public byte[] deviceStatus() throws Exception {
-        byte[] pt = request(hex("0808101d5200"), 8000);
-        log.log("设备状态明文: " + (pt == null ? "(无应答)" : Crypto.hex(pt)));
-        if (pt == null) return null;
+        // 注意：手表也会主动推 2/29（f24 里只有 f1，无电量），长连接复用时会先收到这种。
+        // 所以这里主动发请求后持续读，优先返回带 f24.f3（电量）的那条，超时才退而求其次。
+        sendEncrypted(Framing.CH_PB, hex("0808101d5200"));
+        byte[] best = null;
+        long end = System.currentTimeMillis() + 9000;
+        while (System.currentTimeMillis() < end) {
+            Framing.Frame f = await((byte) -1, 800);
+            if (f == null) continue;
+            if (f.type != Framing.TYPE_DATA || f.channel() != Framing.CH_PB) continue;
+            byte[] pt = decryptIncoming(f.data());
+            if (pt == null || !isDeviceStatus(pt)) continue;
+            best = pt;
+            if (hasBattery(pt)) break;      // 拿到带电量的就结束
+        }
+        if (best == null) { log.log("设备状态明文: (无应答)"); return null; }
+        log.log("设备状态明文: " + Crypto.hex(best));
+        byte[] pt = best;
         for (PB.F f10 : PB.parse(pt)) {
             if (f10.field != 10 || f10.bytes == null) continue;
             for (PB.F f24 : PB.parse(f10.bytes)) {
@@ -661,6 +675,28 @@ public class WearLink {
             }
         }
         return pt;
+    }
+
+    /** 是否是 module 8 sub 29（设备状态）*/ 
+    private static boolean isDeviceStatus(byte[] pt) {
+        int m = -1, s = -1;
+        for (PB.F f : PB.parse(pt)) {
+            if (f.field == 1) m = (int) f.varint;
+            if (f.field == 2) s = (int) f.varint;
+        }
+        return m == 8 && s == 29;
+    }
+
+    /** 2/29 里是否带了电量（f10.f24.f3）*/
+    private static boolean hasBattery(byte[] pt) {
+        for (PB.F f10 : PB.parse(pt)) {
+            if (f10.field != 10 || f10.bytes == null) continue;
+            for (PB.F f24 : PB.parse(f10.bytes)) {
+                if (f24.field != 24 || f24.bytes == null) continue;
+                for (PB.F g : PB.parse(f24.bytes)) if (g.field == 3 && g.bytes != null) return true;
+            }
+        }
+        return false;
     }
 
     /** module 2 sub 78：查询设备状态（旧接口，手表未必支持） */
