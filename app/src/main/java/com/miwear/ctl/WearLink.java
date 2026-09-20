@@ -465,7 +465,6 @@ public class WearLink {
             Framing.Frame f = await((byte) -1, 500);
             if (f == null) continue;
             if (f.type == Framing.TYPE_DATA) {
-                ack(f);
                 if (f.channel() == Framing.CH_PB) return Crypto.ctr(keys.deviceKey, f.data());
             }
         }
