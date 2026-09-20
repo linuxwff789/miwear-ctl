@@ -45,12 +45,17 @@ public final class PB {
         }
     }
 
+    /** 写字段 key：field<<3 | wire。⚠️ field ≥ 16 时必须用 varint（不能只写一个字节） */
+    private static void key(ByteArrayOutputStream o, int field, int wire) {
+        varint(o, ((long) field << 3) | wire);
+    }
+
     public static void str(ByteArrayOutputStream o, int field, String s) {
-        try { byte[] b = s.getBytes("UTF-8"); o.write((field << 3) | 2); varint(o, b.length); o.write(b, 0, b.length); }
+        try { byte[] b = s.getBytes("UTF-8"); key(o, field, 2); varint(o, b.length); o.write(b, 0, b.length); }
         catch (Exception ignored) {}
     }
 
     public static void bytes(ByteArrayOutputStream o, int field, byte[] b) {
-        o.write((field << 3) | 2); varint(o, b.length); o.write(b, 0, b.length);
+        key(o, field, 2); varint(o, b.length); o.write(b, 0, b.length);
     }
 }

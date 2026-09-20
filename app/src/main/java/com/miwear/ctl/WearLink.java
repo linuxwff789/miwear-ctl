@@ -369,23 +369,29 @@ public class WearLink {
 
     public boolean netProxyRunning() { return net != null && net.isStarted(); }
 
-    /** 告诉手表「我支持联网」：module 18 sub 1（抓包复刻：oyt{f1=18,f2=1,f20={f1={f1=10}}}） */
+    /** 告诉手表「我支持联网」：module 18 sub 1（抓包复刻 oyt{f1=18,f2=1,f20={f1={f1=10}}}） */
     public void sendNetCapability() {
         try {
+            ByteArrayOutputStream inner = new ByteArrayOutputStream();
+            inner.write(0x08); PB.varint(inner, 10);                 // {f1: 10}
             ByteArrayOutputStream x = new ByteArrayOutputStream();
-            x.write(0x08); PB.varint(x, 10);                 // x5h.f1 = {f1: 10}
-            sendEncrypted(Framing.CH_PB, oyt(18, 1, 20, x.toByteArray()));
+            PB.bytes(x, 1, inner.toByteArray());                     // x5h{f1: {f1:10}}
+            byte[] body = oyt(18, 1, 20, x.toByteArray());
+            log.log("→ 联网能力 " + Crypto.hex(body));
+            sendEncrypted(Framing.CH_PB, body);
         } catch (Exception e) { log.log("❌ 回联网能力失败: " + e); }
     }
 
-    /** 告诉手表网络状态（抓包里的 module 2 sub 14：oyt{f1=2,f2=14,f4={f34={f1=1}}}） */
+    /** 告诉手表网络状态（抓包：module 2 sub 14，oyt{f1=2,f2=14,f4={f34={f1=1}}}） */
     public void sendNetStatus() {
         try {
             ByteArrayOutputStream a = new ByteArrayOutputStream();
             a.write(0x08); PB.varint(a, 1);
             ByteArrayOutputStream b = new ByteArrayOutputStream();
             PB.bytes(b, 34, a.toByteArray());
-            sendEncrypted(Framing.CH_PB, oyt(2, 14, 4, b.toByteArray()));
+            byte[] body = oyt(2, 14, 4, b.toByteArray());
+            log.log("→ 网络状态 " + Crypto.hex(body));
+            sendEncrypted(Framing.CH_PB, body);
         } catch (Exception e) { log.log("❌ 发网络状态失败: " + e); }
     }
 
