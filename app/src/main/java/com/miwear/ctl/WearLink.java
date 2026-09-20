@@ -370,9 +370,9 @@ public class WearLink {
     }
 
     /**
-     * 来电通知（官方 BleNotifyModel.getInCallNotifyData）：**也是走普通通知通道**，
-     * 但包名固定 "phone"，且 f8 = callType。
-     * callType：1=来电 2=去电 3=未接（按官方 `callType == 3` 的特殊处理推断）
+     * 来电通知：官方 BleNotifyModel 用包名 "phone" + f8=callType，但实测**手表认的是 f16=true**
+     * （这就是最早那版「电话模式长震动」的原因）。这里两者都给上，确保手表按来电处理。
+     * callType：1=来电 2=去电 3=未接
      */
     public void incomingCall(String number, String displayName, int callType) throws Exception {
         if (keys == null) throw new IllegalStateException("未认证");
@@ -390,10 +390,11 @@ public class WearLink {
         PB.str(lli, 4, "");                       // f4
         PB.str(lli, 5, text);                     // f5
         PB.str(lli, 6, time);                     // f6
-        lli.write(0x38); PB.varint(lli, 0);       // f7  id = 0
-        lli.write(0x40); PB.varint(lli, callType); // f8  callType ← 关键
+        lli.write(0x38); PB.varint(lli, 0);       // f7  id = 0（官方 INCOMING_CALL_UID = 0）
+        lli.write(0x40); PB.varint(lli, callType); // f8  callType
         PB.str(lli, 9, "");                       // f9
-        lli.write(0x58); lli.write(0x01);         // f11 = true（支持在手表上回复）
+        lli.write(0x58); lli.write(0x01);         // f11 = true
+        lli.write((byte) 0x80); lli.write(0x01); lli.write(0x01);   // f16 = true ← 来电标记（实测关键）
         log.log("来电 callType=" + callType + " " + title + " " + text);
         sendNotifyBytes(lli.toByteArray());
     }
