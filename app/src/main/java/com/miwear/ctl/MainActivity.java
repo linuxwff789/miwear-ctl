@@ -22,6 +22,7 @@ public class MainActivity extends Activity implements WearLink.Log {
 
     @Override protected void onCreate(Bundle st) {
         super.onCreate(st);
+        WearLink.APP = getApplicationContext();
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         int p = (int) (12 * getResources().getDisplayMetrics().density);

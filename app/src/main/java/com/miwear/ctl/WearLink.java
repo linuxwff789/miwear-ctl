@@ -21,6 +21,9 @@ public class WearLink {
 
     public interface Log { void log(String s); }
 
+    /** 由 MainActivity 注入，供需要系统服务的功能使用 */
+    public static android.content.Context APP;
+
     static byte[] hex(String s) {
         byte[] b = new byte[s.length() / 2];
         for (int i = 0; i < b.length; i++) b[i] = (byte) Integer.parseInt(s.substring(i * 2, i * 2 + 2), 16);
@@ -115,6 +118,11 @@ public class WearLink {
                                 } else {
                                     log.log("↩ 手表问联网能力（网关未开，不应答）");
                                 }
+                                continue;
+                            }
+                            if (mod == 23 && sub == 0) {
+                                log.log("↩ 手表问手机状态，回 module23 sub1");
+                                sendPhoneStatus();
                                 continue;
                             }
                             if (mod == 2 && sub == 2) {          // 设备信息心跳
@@ -537,6 +545,33 @@ public class WearLink {
         }
         log.log("共 " + out.size() + " 个应用");
         return out;
+    }
+
+    /** module 23 sub 1：回答手表的「手机状态」询问（oyt{f1=23,f2=1,f25={f1={f1=状态}}}）
+     *  状态：0=熄屏 1=锁屏但亮屏 2=亮屏已解锁 */
+    public void sendPhoneStatus() {
+        try {
+            int st = 0;
+            try {
+                android.app.KeyguardManager km = (android.app.KeyguardManager)
+                        APP.getSystemService(android.content.Context.KEYGUARD_SERVICE);
+                android.os.PowerManager pm = (android.os.PowerManager)
+                        APP.getSystemService(android.content.Context.POWER_SERVICE);
+                boolean locked = km != null && km.isKeyguardLocked();
+                boolean interactive = pm != null && pm.isInteractive();
+                st = interactive ? (locked ? 1 : 2) : 0;
+            } catch (Throwable ignored) {}
+            ByteArrayOutputStream d = new ByteArrayOutputStream();
+            d.write(0x08); PB.varint(d, st);
+            ByteArrayOutputStream v = new ByteArrayOutputStream();
+            PB.bytes(v, 1, d.toByteArray());
+            ByteArrayOutputStream o = new ByteArrayOutputStream();
+            o.write(0x08); PB.varint(o, 23);
+            o.write(0x10); PB.varint(o, 1);
+            PB.bytes(o, 25, v.toByteArray());
+            sendEncrypted(Framing.CH_PB, o.toByteArray());
+            log.log("→ 手机状态 " + st);
+        } catch (Exception e) { log.log("❌ 回手机状态失败: " + e); }
     }
 
     /** module 8 sub 29：查询手表状态（电量等）。应答 oyt{f10={f24={f1,f2=时间戳,f3={f1=电量%},f7}}} */
