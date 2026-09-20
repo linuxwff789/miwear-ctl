@@ -4,7 +4,8 @@
 
 ```bash
 tools/miwear status                       # 体检：root/蓝牙/锁屏/官方App/手表配对
-tools/miwear serve start                  # 启动常驻 CLI 服务（认证只做一次，后续命令秒回）
+tools/miwear serve start                  # 启动常驻服务（后台静默；认证只做一次，后续命令 ~0.3s）
+tools/miwear serve start --quiet          # 同上但不要常驻通知
 tools/miwear key [--save]                 # 自动读出手表 auth key（来自官方 App 数据库）
 tools/miwear install demo.rpk             # 装 rpk 到手表（自动停官方 App、等结果）
 tools/miwear apps                         # 列出手表上已安装的快应用（含指纹）
@@ -78,14 +79,25 @@ App 内部完成 SPP 连接 → 认证 → 执行动作，日志写在
 内核根本没有 hci_dev（`/sys/class/bluetooth/` 为空）。所以从 Termux 里 connect 内核 RFCOMM 会
 在 `hci_get_route() == NULL` 处直接返回 `EHOSTUNREACH`。
 
-于是把 App 做成**常驻后端**，CLI 通过本地 socket 下令：
+于是把 App 做成**常驻后端**，CLI 通过本地 socket 下令（**后台静默，界面不会出现**）：
 
 ```bash
-miwear serve start    # 启动（App 里起一个前台服务 + 127.0.0.1:38787）
-miwear info           # 之后所有命令都走常驻连接：不用 am start、不用重复认证
-miwear serve status   # 看状态（含链路、MAC、端口）
-miwear serve stop     # 停
+miwear serve start          # 启动（am start-foreground-service 直接起服务，不拉 Activity）
+miwear serve start --quiet  # 连常驻通知都不要（用 am start-service；可能被系统回收）
+miwear serve status         # 看状态（链路 / MAC / 端口）
+miwear serve stop           # 停（顺手关掉开机自启）
+miwear serve autostart on|off  # 用广播控制（am broadcast，无需 root 也能触发）
 ```
+
+启动后：
+
+- 命令从 `am start` + 重认证的 ~5s 降到 **~0.3~0.6s**（认证只做一次，连接一直复用）
+- 日志是**实时流**（`miwear log -f`、`netproxy` 的 ch7 流量边跑边看）
+- **开机自启**：只要用过一次 `serve start`，开机/重启/覆盖安装后会自动静默拉起
+  （`BootReceiver` 收 `BOOT_COMPLETED`；`serve stop` 会关掉它）
+  - 小米/HyperOS 需在「设置 → 应用 → miwear-ctl → **自启动**」里允许，否则系统会拦开机广播
+  - 首次启动时会自动 `dumpsys deviceidle whitelist +` / `set-standby-bucket active` 防 app freezer
+- 常驻通知是 `IMPORTANCE_MIN`（无声、不震动、不弹横幅）；`--quiet` 则完全不挂通知
 
 协议是一行一个 JSON（`nc 127.0.0.1 38787` 可手测）：
 
