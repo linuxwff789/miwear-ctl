@@ -351,6 +351,19 @@ public class WearLink {
     public void startNetProxy() {
         if (net == null) net = new NetProxyBridge(log, this::sendNetData);
         net.start();
+        if (!net.isStarted()) return;
+        // 抓包复刻：先发「网络状态」再发「联网能力」，否则手表不会把 IP 包丢过来
+        new Thread(() -> {
+            for (int i = 0; i < 4; i++) {
+                try {
+                    sendNetStatus();          // module 2 sub 14 (f34.f1=1)
+                    Thread.sleep(300);
+                    sendNetCapability();      // module 18 sub 1
+                    Thread.sleep(2500);
+                } catch (InterruptedException ignored) { return; }
+                if (!net.isStarted()) return;
+            }
+        }, "netproxy-hello").start();
     }
     public void stopNetProxy() { if (net != null) net.stop(); }
 
