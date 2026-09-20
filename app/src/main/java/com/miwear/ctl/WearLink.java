@@ -357,14 +357,15 @@ public class WearLink {
         if (net == null) net = new NetProxyBridge(log, this::sendNetData);
         net.start();
         if (!net.isStarted()) return;
-        // 抓包复刻：重放官方 App 的初始化序列（官方是 25ms 级紧密发送）
+        // init 只重放一次（里面含 2/14(4)/(2)，反复发会把网络状态又按回去）
         sendHexList(NET_INIT, 40);
+        // 之后只周期维持「网络可用(2/14 f1=1) + 联网能力(18/1)」
         new Thread(() -> {
-            for (int r = 0; r < 20; r++) {
+            for (int r = 0; r < 40; r++) {
                 try {
-                    Thread.sleep(r == 0 ? 1500 : 4000);
+                    Thread.sleep(2500);
                     if (!net.isStarted()) return;
-                    sendHexList(NET_INIT, 40);
+                    sendHexList(new String[]{ "0802100e22059202020801", "08121001a201040a02080a" }, 250);
                 } catch (InterruptedException ignored) { return; }
             }
         }, "netproxy-hello").start();
