@@ -50,6 +50,8 @@ export default {
     } catch (e) {
       this.netType = '(不支持)'
     }
+    // 自动跑一次，方便无人值守验证
+    setTimeout(function () { self.onTest() }, 800)
   },
 
   onTest() {

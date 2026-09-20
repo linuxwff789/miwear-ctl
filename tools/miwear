@@ -14,6 +14,7 @@
 #   launch <包名> [uri]       在手表上启动应用（设备不回执）
 #   notify <标题> <内容> [包]  推一条通知到手表
 #   raw <hex>                 发任意 oyt 明文（加密）并打印应答，调试用
+#   net                       启动手表联网网关（手机侧 libnetproxy.so 做 NAT）
 #   log [-n 行数] [-f]        看 App 日志（-f 持续跟随）
 #   build apk|rpk [--install] 触发 GitHub Actions 构建
 #
@@ -185,6 +186,23 @@ cmd_notify() {
 cmd_raw() {
   local h=${1:-}; [ -n "$h" ] || die "用法: miwear raw <oyt的hex>"
   do_action "应答明文" 40 --es raw_hex "$h"
+}
+
+# 启动手表联网网关（手机侧跑 libnetproxy.so，把 ch7 的 IP 包做 NAT）
+cmd_net() {
+  ensure_key; need_root; need_app
+  local run="$$-$RANDOM"
+  su -c "am force-stop com.mi.health; am force-stop $PKG" 2>/dev/null
+  sleep 1
+  launch_app --es run_id "$run" --ez netproxy true
+  wait_for "RUN $run" 25 || { warn "App 没起来"; log_dump; return 1; }
+  if wait_for "netproxy 已启动|libnetproxy.so 未加载" 40; then
+    log_dump | tail -6
+    ok "联网网关已启动（保持连接中）"
+    info "手表端发起请求后，用 miwear log 看 ch7 流量"
+  else
+    warn "启动失败"; log_dump; return 1
+  fi
 }
 
 # ──────── auth key（从官方 App 数据库自动读）────────
@@ -361,8 +379,9 @@ case "${1:-}" in
   launch)    shift; cmd_launch "$@" ;;
   notify)    shift; cmd_notify "$@" ;;
   raw)       shift; cmd_raw "$@" ;;
+  net)       shift; cmd_net "$@" ;;
   log)       shift; cmd_log "$@" ;;
   build)     shift; cmd_build "$@" ;;
-  ""|-h|--help|help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
+  ""|-h|--help|help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) die "未知命令: $1（试 miwear help）" ;;
 esac
