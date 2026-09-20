@@ -98,22 +98,26 @@ public class WearLink {
                     if (f.type == Framing.TYPE_DATA && f.channel() != 10) {
                         try { ack(f); } catch (Exception ignored) {}
                     }
-                    // 联网模式下：解密并打印手表主动发来的包，并自动应答「支持联网吗」(module 18 sub 0)
-                    if (net != null && net.isStarted() && f.type == Framing.TYPE_DATA
-                            && f.channel() == Framing.CH_PB && f.opCode() == Framing.OP_WRITE_ENC && keys != null) {
+                    // 认证后：解密 ch1 帧。module18/0 自动应答；设备心跳(2/2)丢弃；其余入队给 request()
+                    if (f.type == Framing.TYPE_DATA && f.channel() == Framing.CH_PB
+                            && f.opCode() == Framing.OP_WRITE_ENC && keys != null) {
                         byte[] pt = Crypto.ctr(keys.deviceKey, f.data());
                         if (pt != null) {
-                            log.log("← ch1 明文 " + Crypto.hex(pt));
+                            long mod = -1, sub = -1;
                             for (PB.F g : PB.parse(pt)) {
-                                if (g.field == 1 && g.varint == 18) {   // module 18
-                                    long sub = 0;
-                                    for (PB.F h : PB.parse(pt)) if (h.field == 2) sub = h.varint;
-                                    if (sub == 0) {
-                                        log.log("↩ 手表问联网能力，回 module18 sub1");
-                                        sendNetCapability();
-                                    }
-                                }
+                                if (g.field == 1) mod = g.varint;
+                                else if (g.field == 2) sub = g.varint;
                             }
+                            if (mod == 18 && sub == 0) {
+                                log.log("↩ 手表问联网能力，回 module18 sub1");
+                                sendNetCapability();
+                                continue;
+                            }
+                            if (mod == 2 && sub == 2) {          // 设备信息心跳
+                                continue;
+                            }
+                            log.log("← ch1 明文 " + Crypto.hex(pt));
+                            synchronized (queue) { queue.add(f); queue.notifyAll(); }
                         }
                         continue;
                     }
@@ -461,17 +465,25 @@ public class WearLink {
         return o.toByteArray();
     }
 
-    /** 发一条加密 oyt 并等 PB 应答，返回解密后的明文（超时返回 null） */
+    /** 发一条加密 oyt 并等**模块匹配**的应答，返回解密后的明文（超时返回 null） */
     public byte[] request(byte[] body, long timeoutMs) throws Exception {
         if (keys == null) throw new IllegalStateException("未认证");
+        long wantMod = -1;
+        for (PB.F g : PB.parse(body)) if (g.field == 1) wantMod = g.varint;
         sendEncrypted(Framing.CH_PB, body);
         long end = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < end) {
             Framing.Frame f = await((byte) -1, 500);
             if (f == null) continue;
-            if (f.type == Framing.TYPE_DATA) {
-                if (f.channel() == Framing.CH_PB) return Crypto.ctr(keys.deviceKey, f.data());
+            if (f.type != Framing.TYPE_DATA || f.channel() != Framing.CH_PB) continue;
+            byte[] pt = Crypto.ctr(keys.deviceKey, f.data());
+            if (pt == null) continue;
+            if (wantMod >= 0) {
+                long m = -1;
+                for (PB.F g : PB.parse(pt)) if (g.field == 1) m = g.varint;
+                if (m != wantMod) continue;          // 不是我们要的模块的应答，跳过
             }
+            return pt;
         }
         return null;
     }
