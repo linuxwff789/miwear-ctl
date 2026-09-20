@@ -118,17 +118,22 @@ cmd_install() {
   else
     rpk=${1:-}; [ -n "$rpk" ] || die "用法: miwear install <a.rpk>"
   fi
-  [ -f "$rpk" ] || die "文件不存在: $rpk"
+  local sz; sz=$(su -c "stat -c %s $(q "$rpk") 2>/dev/null")
+  [ -n "$sz" ] || die "文件不存在或读不到: $rpk"
 
   need_root; need_app
-  local base; base=$(basename "$rpk")
-  su -c "cp $(q "$rpk") $FILES/$base && chmod 644 $FILES/$base" || die "拷贝 rpk 失败"
-  info "安装 $base（$(stat -c %s "$rpk") 字节）"
+  local base; base=$(basename "$rpk"); local dst=$FILES/$base
+  if [ "$rpk" != "$dst" ]; then
+    su -c "cp $(q "$rpk") $dst && chmod 644 $dst" || die "拷贝 rpk 失败"
+  else
+    su -c "chmod 644 $dst"
+  fi
+  info "安装 $base（$sz 字节）"
 
   local run="$$-$RANDOM"
   su -c "am force-stop com.mi.health; am force-stop $PKG" 2>/dev/null
   sleep 1
-  launch_app --es run_id "$run" --es install_rpk "$FILES/$base"
+  launch_app --es run_id "$run" --es install_rpk "$dst"
   wait_for "RUN $run" 25 || { warn "App 没起来"; log_dump; return 1; }
   if wait_for "rpk 发送完成|❌" 90; then
     log_dump
