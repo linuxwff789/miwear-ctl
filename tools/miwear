@@ -9,6 +9,7 @@
 #   install --build           先云构建 quickapp 再装
 #   apps                      列出手表上已安装的快应用
 #   app <包名>                查询某个应用在手表上的状态
+#   key [--save]              从官方 App 数据库自动读取 auth key（--save 写入配置）
 #   uninstall <包名> [指纹]   卸载（设备不回执，看手表界面）
 #   launch <包名> [uri]       在手表上启动应用（设备不回执）
 #   notify <标题> <内容> [包]  推一条通知到手表
@@ -30,8 +31,8 @@ mkdir -p "$TMP" 2>/dev/null || true
 # ───────── 配置 ─────────
 CONF=${MIWEAR_CONF:-$HOME/.config/miwear/config}
 [ -f "$CONF" ] && . "$CONF"
-MAC=${MAC:-D4:A3:65:C0:BE:EA}
-KEY=${KEY:-af994c1833f9329d0e4b083d56547e13}
+MAC=${MAC:-}
+KEY=${KEY:-}
 REPO=${REPO:-linuxwff789/miwear-ctl}
 
 R=$'\033[31m'; G=$'\033[32m'; Y=$'\033[33m'; C=$'\033[36m'; D=$'\033[2m'; N=$'\033[0m'
@@ -73,7 +74,7 @@ launch_app() {
 # 跑一次动作并等结果。失败自动重试一次（SPP 连接偶发失败）
 do_action() {
   local pat=$1 t=$2; shift 2
-  need_root; need_app
+  ensure_key; need_root; need_app
   local run="$$-$RANDOM" attempt
   for attempt in 1 2; do
     su -c "am force-stop com.mi.health; am force-stop $PKG" 2>/dev/null
@@ -98,11 +99,14 @@ do_action() {
 cmd_status() {
   need_root
   echo "── miwear 体检 ──"
+  [ -n "${MAC:-}" ] || MAC=$(detect_mac)
   su -c "dumpsys bluetooth_manager" 2>/dev/null | grep -q "state: ON" && ok "蓝牙已开" || warn "蓝牙未开"
   local lock; lock=$(su -c "dumpsys window" 2>/dev/null | grep -oE 'mDreamingLockscreen=(true|false)' | head -1)
   case "$lock" in *false) ok "手机已解锁" ;; *true) warn "手机锁屏中（不影响，但建议解锁）" ;; esac
   su -c "dumpsys bluetooth_manager" 2>/dev/null | grep -q "$MAC" && ok "手表已配对 ($MAC)" || warn "未找到配对的手表 $MAC"
   su -c "pm path $PKG" >/dev/null 2>&1 && ok "miwear-ctl 已安装" || warn "miwear-ctl 未安装 → miwear build apk --install"
+  if [ -n "${KEY:-}" ]; then ok "auth key 已配置"
+  else info "auth key 未配置（首次推送时会自动从小米运动健康数据库读取）"; fi
   su -c "ps -A" 2>/dev/null | grep -q com.mi.health \
     && warn "小米运动健康正在运行（推送时会自动停掉）" || ok "官方 App 未运行（SPP 通道空闲）"
   info "配置：MAC=$MAC  KEY=${KEY:0:8}…  REPO=$REPO"
@@ -122,6 +126,7 @@ cmd_install() {
   [ -n "$sz" ] || die "文件不存在或读不到: $rpk"
 
   need_root; need_app
+  ensure_key
   local base; base=$(basename "$rpk"); local dst=$FILES/$base
   if [ "$rpk" != "$dst" ]; then
     su -c "cp $(q "$rpk") $dst && chmod 644 $dst" || die "拷贝 rpk 失败"
@@ -180,6 +185,79 @@ cmd_notify() {
 cmd_raw() {
   local h=${1:-}; [ -n "$h" ] || die "用法: miwear raw <oyt的hex>"
   do_action "应答明文" 40 --es raw_hex "$h"
+}
+
+# ──────── auth key（从官方 App 数据库自动读）────────
+save_config() { mkdir -p "$(dirname "$CONF")"; { echo "MAC=$MAC"; echo "KEY=$KEY"; echo "REPO=$REPO"; } > "$CONF"; }
+
+# 读官方 App 的 device 表；输出: mac \t key \t model \t name（失败/无则输出空或 NONE）
+read_key_from_db() {
+  local dbdir=$HOME/.miwear-tmp
+  mkdir -p "$dbdir"
+  su -c "rm -f $dbdir/device_db*; cp /data/data/com.mi.health/databases/device_db* $dbdir/ 2>/dev/null; chmod 666 $dbdir/device_db* 2>/dev/null"
+  [ -f "$dbdir/device_db" ] || { echo NODB; return 0; }
+  MIWEAR_MAC="${MAC:-}" python3 - "$dbdir/device_db" <<'PY'
+import sqlite3,json,sys,os
+p=sys.argv[1]; want=os.environ.get('MIWEAR_MAC','').upper()
+c=sqlite3.connect(p)
+cols=[r[1] for r in c.execute('PRAGMA table_info(device)')]
+found=[]
+for row in c.execute('select * from device'):
+    r=dict(zip(cols,row))
+    for col in ('detail','extraValues'):
+        s=r.get(col) or ''
+        if 'encrypt_key' not in s: continue
+        try: j=json.loads(s)
+        except Exception: continue
+        k=j.get('encrypt_key')
+        if k: found.append((j.get('mac',''),k,r.get('model',''),(r.get('name') or '').strip()))
+if not found:
+    print('NONE'); raise SystemExit
+pick=next((f for f in found if f[0].upper()==want), found[0])
+print('%s\t%s\t%s\t%s' % pick)
+PY
+}
+
+# 从已配对设备里猜手表 MAC
+detect_mac() {
+  su -c "dumpsys bluetooth_manager" 2>/dev/null | sed -n '/Bonded devices/,/AdapterState/p' \
+    | grep -iE "watch|手环|手表" | grep -oiE "([0-9a-f]{2}:){5}[0-9a-f]{2}" | head -1
+}
+
+# 没配置时自动推导 auth key（及 MAC）
+ensure_key() {
+  [ -n "${MAC:-}" ] || MAC=$(detect_mac)
+  [ -n "${KEY:-}" ] && return 0
+  need_root
+  local out; out=$(read_key_from_db)
+  case "$out" in
+    NODB|NONE|"") die "没找到 auth key。手动创建 $CONF（MAC=/KEY=），或跑 miwear key 看看原因" ;;
+  esac
+  local dmac dkey
+  IFS=$'\t' read -r dmac dkey _ _ <<< "$out"
+  [ -n "${MAC:-}" ] || MAC=$dmac
+  KEY=$dkey
+  info "已自动获取 auth key（来自小米运动健康数据库）"
+  save_config
+}
+
+cmd_key() {
+  need_root
+  local save=0
+  [ "${1:-}" = "--save" ] && save=1
+  [ -n "${MAC:-}" ] || MAC=$(detect_mac)
+  local out; out=$(read_key_from_db)
+  case "$out" in
+    NODB) die "读不到小米运动健康的 device_db（App 装了吗？）" ;;
+    NONE|"") die "数据库里没找到 encrypt_key" ;;
+  esac
+  local mac key model name
+  IFS=$'\t' read -r mac key model name <<< "$out"
+  ok "auth key = $key"
+  info "手表：$name ($model)   MAC=$mac"
+  [ "${mac^^}" = "${MAC^^}" ] || warn "配置里的 MAC ($MAC) 与数据库 ($mac) 不一致"
+  if [ $save -eq 1 ]; then MAC=$mac; KEY=$key; save_config; ok "已写入 $CONF"
+  else info "加 --save 可写入 $CONF"; fi
 }
 
 # ───────── log ─────────
@@ -278,12 +356,13 @@ case "${1:-}" in
   install)   shift; cmd_install "$@" ;;
   apps)      shift; cmd_apps "$@" ;;
   app)       shift; cmd_app "$@" ;;
+  key)       shift; cmd_key "$@" ;;
   uninstall) shift; cmd_uninstall "$@" ;;
   launch)    shift; cmd_launch "$@" ;;
   notify)    shift; cmd_notify "$@" ;;
   raw)       shift; cmd_raw "$@" ;;
   log)       shift; cmd_log "$@" ;;
   build)     shift; cmd_build "$@" ;;
-  ""|-h|--help|help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
+  ""|-h|--help|help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) die "未知命令: $1（试 miwear help）" ;;
 esac
