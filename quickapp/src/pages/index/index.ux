@@ -5,6 +5,10 @@
       <text class="sub">{{ subtitle }}</text>
     </div>
 
+    <div class="card">
+      <text class="line">手机消息：{{ msg }}</text>
+    </div>
+
     <div class="card center">
       <text class="counter">{{ count }}</text>
       <text class="hint">点击下面按钮 +1 并震动</text>
@@ -32,10 +36,6 @@
       <div class="btn primary" @click="onNet">
         <text class="btn-text">联网测试</text>
       </div>
-    </div>
-
-    <div class="card">
-      <text class="sub">手机消息：{{ msg }}</text>
     </div>
   </div>
 </template>
@@ -156,6 +156,11 @@ export default {
   font-size: 20px;
   color: #8e8e93;
   margin-top: 6px;
+}
+
+.line {
+  font-size: 22px;
+  color: #ffa626;
 }
 
 .counter {
