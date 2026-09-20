@@ -328,8 +328,20 @@ public class WearLink {
         log.log("MassPrepare = " + Crypto.hex(oyt.toByteArray()));
 
         sendEncrypted(Framing.CH_PB, oyt.toByteArray());
-        Framing.Frame resp = await((byte) -1, 5000);
-        if (resp != null) log.log("MassPrepare 应答: " + Crypto.hex(resp.data()));
+        // 等应答并 ACK（必须 ACK，否则设备会一直重传）
+        long end = System.currentTimeMillis() + 6000;
+        while (System.currentTimeMillis() < end) {
+            Framing.Frame f = await((byte) -1, 800);
+            if (f == null) continue;
+            if (f.type == Framing.TYPE_DATA) {
+                ack(f);
+                if (f.channel() == Framing.CH_PB) {
+                    byte[] pt = Crypto.ctr(keys.deviceKey, f.data());
+                    log.log("MassPrepare 应答明文: " + (pt == null ? "(解密失败)" : Crypto.hex(pt)));
+                    break;
+                }
+            }
+        }
 
         // ② 分片发送（MASS 通道，明文）
         final int SEG = 16384;
@@ -351,8 +363,31 @@ public class WearLink {
             sendData(Framing.CH_MASS, Framing.OP_WRITE, seg.toByteArray());
             off += n;
             log.log("  片 " + idx + " 已发 (" + n + "B)");
-            Framing.Frame a = await((byte) -1, 3000);
+            // 收帧并 ACK（关键！）
+            long e2 = System.currentTimeMillis() + 1500;
+            while (System.currentTimeMillis() < e2) {
+                Framing.Frame a = await((byte) -1, 400);
+                if (a == null) continue;
+                if (a.type == Framing.TYPE_DATA) {
+                    ack(a);
+                    byte[] pt = (a.channel() == Framing.CH_PB)
+                              ? Crypto.ctr(keys.deviceKey, a.data()) : null;
+                    log.log("    ← 设备 DATA ch=" + a.channel() + " op=" + a.opCode()
+                            + (pt != null ? " 明文=" + Crypto.hex(pt) : ""));
+                }
+            }
         }
-        log.log("✅ rpk 发送完成，共 " + idx + " 片");
+        log.log("✅ rpk 发送完成，共 " + idx + " 片，等待设备处理…");
+        long e3 = System.currentTimeMillis() + 15000;
+        while (System.currentTimeMillis() < e3) {
+            Framing.Frame a = await((byte) -1, 1000);
+            if (a == null) continue;
+            if (a.type == Framing.TYPE_DATA) {
+                ack(a);
+                byte[] pt = (a.channel() == Framing.CH_PB) ? Crypto.ctr(keys.deviceKey, a.data()) : null;
+                log.log("    ← 事后 DATA ch=" + a.channel() + " op=" + a.opCode()
+                        + (pt != null ? " 明文=" + Crypto.hex(pt) : ""));
+            }
+        }
     }
 }
