@@ -197,7 +197,8 @@ public class MainActivity extends Activity implements WearLink.Log {
                         if (raw != null) { link.rawCall(hex2(raw), 8000); return; }
                         String cn = it.getStringExtra("call_number");
                         if (cn != null) {
-                            link.incomingCall(cn, it.getStringExtra("call_name"));
+                            link.incomingCall(cn, it.getStringExtra("call_name"),
+                                              it.getIntExtra("call_type", 1));
                             return;
                         }
                         String ap = it.getStringExtra("app_pkg");

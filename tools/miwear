@@ -13,7 +13,7 @@
 #   uninstall <包名> [指纹]   卸载（设备不回执，看手表界面）
 #   launch <包名> [uri]       在手表上启动应用（设备不回执）
 #   notify <标题> <内容> [包]  推一条普通通知到手表（短震动）
-#   call <号码> [姓名]         模拟来电（长震动/响铃）
+#   call <号码> [姓名] [类型]   模拟来电（长震动/响铃）
 #   info                      查询设备状态（电量等，module 2 sub 78）
 #   find                      找手表：让手表震动/响铃
 #   msg <包名> <文本>          给手表快应用发消息（interconnect）
@@ -188,11 +188,11 @@ cmd_notify() {
   do_action "通知 oyt" 40 --es notify_title "$t" --es notify_text "$x" --es notify_pkg "$p"
 }
 
-# 来电通知（module 21 sub 3）
+# 来电通知（包名 "phone" + f8=callType）
 cmd_call() {
-  local num=${1:-}; local name=${2:-}
-  [ -n "$num" ] || die "用法: miwear call <号码> [姓名]"
-  do_action "来电 oyt" 40 --es call_number "$num" --es call_name "$name"
+  local num=${1:-}; local name=${2:-}; local ct=${3:-1}
+  [ -n "$num" ] || die "用法: miwear call <号码> [姓名] [类型1=来电/2=去电/3=未接]"
+  do_action "来电 callType" 40 --es call_number "$num" --es call_name "$name" --ei call_type "$ct"
 }
 
 # 设备状态（module 8 sub 29，含电量）

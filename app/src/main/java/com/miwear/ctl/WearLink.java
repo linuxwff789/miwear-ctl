@@ -331,6 +331,20 @@ public class WearLink {
      *   oyt{ f1=7(通知模块) f2=0(添加) f9=kli{ f3=lli.e{ f1 repeated=lli } } }
      *   lli{ f1=包名 f2=标题 f3=内容 f4=应用名 f7=id f12=key }
      */
+    /** 组装 oyt{f1=7,f2=0,f9=kli{f3=lli.e{f1=lli}}} 并发出去 */
+    private void sendNotifyBytes(byte[] lliBytes) throws Exception {
+        ByteArrayOutputStream llie = new ByteArrayOutputStream();
+        PB.bytes(llie, 1, lliBytes);              // lli.e.f1 repeated
+        ByteArrayOutputStream kli = new ByteArrayOutputStream();
+        PB.bytes(kli, 3, llie.toByteArray());     // kli.f3
+        ByteArrayOutputStream oyt = new ByteArrayOutputStream();
+        oyt.write(0x08); PB.varint(oyt, 7);       // f1 模块=通知
+        oyt.write(0x10); PB.varint(oyt, 0);       // f2 子命令=添加
+        PB.bytes(oyt, 9, kli.toByteArray());      // f9
+        log.log("通知 oyt = " + Crypto.hex(oyt.toByteArray()));
+        sendEncrypted(Framing.CH_PB, oyt.toByteArray());
+    }
+
     public void pushNotification(String pkg, String title, String text, String appName, int id) throws Exception {
         if (keys == null) throw new IllegalStateException("未认证");
 
@@ -351,20 +365,36 @@ public class WearLink {
         PB.str(lli, 12, key);                     // f12 key
         // ⚠ f16 官方只在「微信来电」时置 true（BaseNotifySyncService: isWeChatIncomingCall → lliVar.p = true），
         //   普通通知设了它手表会当来电长震动。这里绝不能设！
+        sendNotifyBytes(lli.toByteArray());
+    }
 
-        ByteArrayOutputStream llie = new ByteArrayOutputStream();
-        PB.bytes(llie, 1, lli.toByteArray());     // lli.e.f1 repeated
+    /**
+     * 来电通知（官方 BleNotifyModel.getInCallNotifyData）：**也是走普通通知通道**，
+     * 但包名固定 "phone"，且 f8 = callType。
+     * callType：1=来电 2=去电 3=未接（按官方 `callType == 3` 的特殊处理推断）
+     */
+    public void incomingCall(String number, String displayName, int callType) throws Exception {
+        if (keys == null) throw new IllegalStateException("未认证");
+        String title, text;
+        if (number == null || number.isEmpty()) { title = "未知号码"; text = ""; }
+        else if (displayName == null || displayName.isEmpty()) { title = number; text = ""; }
+        else { title = displayName; text = number; }
+        String time = new java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US)
+                          .format(new java.util.Date());
 
-        ByteArrayOutputStream kli = new ByteArrayOutputStream();
-        PB.bytes(kli, 3, llie.toByteArray());     // kli.f3
-
-        ByteArrayOutputStream oyt = new ByteArrayOutputStream();
-        oyt.write(0x08); PB.varint(oyt, 7);       // f1 模块=通知
-        oyt.write(0x10); PB.varint(oyt, 0);       // f2 子命令=添加
-        PB.bytes(oyt, 9, kli.toByteArray());      // f9
-
-        log.log("通知 oyt = " + Crypto.hex(oyt.toByteArray()));
-        sendEncrypted(Framing.CH_PB, oyt.toByteArray());
+        ByteArrayOutputStream lli = new ByteArrayOutputStream();
+        PB.str(lli, 1, "phone");                  // f1  包名固定 "phone"
+        PB.str(lli, 2, "phone");                  // f2
+        PB.str(lli, 3, title);                    // f3
+        PB.str(lli, 4, "");                       // f4
+        PB.str(lli, 5, text);                     // f5
+        PB.str(lli, 6, time);                     // f6
+        lli.write(0x38); PB.varint(lli, 0);       // f7  id = 0
+        lli.write(0x40); PB.varint(lli, callType); // f8  callType ← 关键
+        PB.str(lli, 9, "");                       // f9
+        lli.write(0x58); lli.write(0x01);         // f11 = true（支持在手表上回复）
+        log.log("来电 callType=" + callType + " " + title + " " + text);
+        sendNotifyBytes(lli.toByteArray());
     }
 
     // ───────────────── 手表联网（L2 通道 7）─────────────────
@@ -468,8 +498,9 @@ public class WearLink {
     }
 
     // ───────────────── 来电（module 21）─────────────────
+    // （来电实际走普通通知通道，见 incomingCall；module 21/3 只是通讯录同步，保留备用）
     /**
-     * 来电通知（module 21 sub 3）—— 官方 BlueToothSender.sendContactInfo：
+     * 通讯录同步（module 21 sub 3）—— 官方 BlueToothSender.sendContactInfo：
      *   oyt{f1=21, f2=3, f23(ux4)={f3(vx4)={f1=姓名, f2=号码}}}
      */
     public void incomingCall(String number, String displayName) throws Exception {
