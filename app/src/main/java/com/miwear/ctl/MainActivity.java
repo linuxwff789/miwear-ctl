@@ -196,6 +196,19 @@ public class MainActivity extends Activity implements WearLink.Log {
                         if (raw != null) { link.rawCall(hex2(raw), 8000); return; }
                         String ap = it.getStringExtra("app_pkg");
                         if (ap != null) { link.appStatus(ap); return; }
+                        if (it.getBooleanExtra("query_status", false)) { link.queryStatus(); return; }
+                        if (it.getBooleanExtra("find_device", false)) { link.findDevice(); return; }
+                        String mp = it.getStringExtra("msg_pkg");
+                        if (mp != null) {
+                            String mt = it.getStringExtra("msg_text");
+                            link.sendPhoneMessage(mp, mt == null ? new byte[0] : mt.getBytes("UTF-8"), null);
+                            return;
+                        }
+                        String sp = it.getStringExtra("sync_pkg");
+                        if (sp != null) {
+                            link.syncPhoneAppStatus(sp, it.getIntExtra("sync_status", 1));
+                            return;
+                        }
                         String nt = it.getStringExtra("notify_title");
                         if (nt != null) {
                             Thread.sleep(1500);

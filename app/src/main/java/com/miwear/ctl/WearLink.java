@@ -523,6 +523,62 @@ public class WearLink {
         return out;
     }
 
+    /** module 2 sub 78：查询设备状态。应答 oyt{f4=shr{f48=ggr{f1 bool,f2 int,f3 bool,f4 bool,f5 kgr}}} */
+    public byte[] queryStatus() throws Exception {
+        byte[] pt = request(oyt(2, 78, 0, null), 8000);
+        log.log("设备状态明文: " + (pt == null ? "(无应答)" : Crypto.hex(pt)));
+        if (pt == null) return null;
+        for (PB.F f4 : PB.parse(pt)) {
+            if (f4.field != 4 || f4.bytes == null) continue;
+            for (PB.F f48 : PB.parse(f4.bytes)) {
+                if (f48.field != 48 || f48.bytes == null) continue;
+                StringBuilder sb = new StringBuilder("  设备状态: ");
+                for (PB.F g : PB.parse(f48.bytes)) {
+                    if (g.field == 2) sb.append("值=").append(g.varint).append(' ');
+                    else if (g.field == 1 || g.field == 3 || g.field == 4)
+                        sb.append("f").append(g.field).append('=').append(g.varint != 0).append(' ');
+                    else if (g.field == 5 && g.bytes != null)
+                        sb.append("f5=").append(Crypto.hex(g.bytes)).append(' ');
+                }
+                log.log(sb.toString());
+            }
+        }
+        return pt;
+    }
+
+    /** module 2 sub 18：让手表响铃/震动（找手表） */
+    public void findDevice() throws Exception {
+        sendEncrypted(Framing.CH_PB, oyt(2, 18, 0, null));
+        log.log("已发送「找手表」（手表应会震动/响铃）");
+    }
+
+    /** module 20 sub 8：给手表快应用发消息（快应用侧 @system.interconnect 的 onmessage） */
+    public void sendPhoneMessage(String pkg, byte[] payload, byte[] extra) throws Exception {
+        ByteArrayOutputStream rxr = new ByteArrayOutputStream();
+        PB.str(rxr, 1, pkg);
+        if (payload != null && payload.length > 0) PB.bytes(rxr, 2, payload);
+        ByteArrayOutputStream vxr = new ByteArrayOutputStream();
+        PB.bytes(vxr, 1, rxr.toByteArray());          // vxr.f1 = rxr
+        if (extra != null && extra.length > 0) PB.bytes(vxr, 2, extra);
+        ByteArrayOutputStream y = new ByteArrayOutputStream();
+        PB.bytes(y, 9, vxr.toByteArray());            // yxr.f9 = vxr
+        byte[] pt = request(oyt(20, 8, 22, y.toByteArray()), 8000);
+        log.log("发消息应答: " + (pt == null ? "(无回执)" : Crypto.hex(pt)));
+    }
+
+    /** module 20 sub 7：同步手机 App 安装状态（status: 1=已安装 2=未安装 3=手机未安装） */
+    public void syncPhoneAppStatus(String pkg, int status) throws Exception {
+        ByteArrayOutputStream rxr = new ByteArrayOutputStream();
+        PB.str(rxr, 1, pkg);
+        ByteArrayOutputStream qxr = new ByteArrayOutputStream();
+        PB.bytes(qxr, 1, rxr.toByteArray());          // qxr.f1 = rxr
+        qxr.write(0x10); PB.varint(qxr, status);      // qxr.f2 = status
+        ByteArrayOutputStream y = new ByteArrayOutputStream();
+        PB.bytes(y, 8, qxr.toByteArray());            // yxr.f8 = qxr
+        byte[] pt = request(oyt(20, 7, 22, y.toByteArray()), 6000);
+        log.log("同步应用状态应答: " + (pt == null ? "(无回执)" : Crypto.hex(pt)));
+    }
+
     /** module 20 sub 21：查询某个应用在手表上的状态 */
     public byte[] appStatus(String pkg) throws Exception {
         ByteArrayOutputStream y = new ByteArrayOutputStream();
