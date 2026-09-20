@@ -1,0 +1,114 @@
+<template>
+  <div class="page">
+    <div class="card">
+      <text class="title">联网测试</text>
+      <text class="sub">手表 → 手机 → 互联网</text>
+    </div>
+
+    <div class="card">
+      <text class="line">网络类型：{{ netType }}</text>
+      <text class="line">状态：{{ status }}</text>
+      <text class="line">返回码：{{ code }}</text>
+    </div>
+
+    <div class="card body">
+      <text class="body-text">{{ body }}</text>
+    </div>
+
+    <div class="row">
+      <div class="btn primary" @click="onTest">
+        <text class="btn-text">HTTP 测试</text>
+      </div>
+      <div class="btn" @click="onBack">
+        <text class="btn-text">返回</text>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+import router from '@system.router'
+import fetch from '@system.fetch'
+import network from '@system.network'
+import prompt from '@system.prompt'
+
+export default {
+  data: {
+    netType: '-',
+    status: '未测试',
+    code: '-',
+    body: ''
+  },
+
+  onReady() {
+    const self = this
+    try {
+      network.getType({
+        success: function (data) { self.netType = data.type || '-' },
+        fail: function () { self.netType = '(读取失败)' }
+      })
+    } catch (e) {
+      this.netType = '(不支持)'
+    }
+  },
+
+  onTest() {
+    const self = this
+    this.status = '请求中…'
+    this.code = '-'
+    this.body = ''
+    try {
+      prompt.showToast({ message: '开始请求' })
+    } catch (e) {}
+    fetch.fetch({
+      url: 'http://www.baidu.com/',
+      method: 'GET',
+      success: function (res) {
+        self.code = String(res.code)
+        const d = typeof res.data === 'string' ? res.data : JSON.stringify(res.data)
+        self.body = d.slice(0, 200)
+        self.status = '成功 ✅'
+        console.log('[net] ok code=' + res.code + ' len=' + d.length)
+      },
+      fail: function (data, code) {
+        self.status = '失败 ❌'
+        self.code = String(code)
+        self.body = String(data).slice(0, 200)
+        console.log('[net] fail ' + data + ' / ' + code)
+      }
+    })
+  },
+
+  onBack() { router.back() }
+}
+</script>
+
+<style>
+.page {
+  flex-direction: column;
+  width: 480px;
+  height: 480px;
+  padding: 14px;
+  background-color: #000000;
+}
+.card {
+  flex-direction: column;
+  padding: 12px;
+  margin-bottom: 10px;
+  border-radius: 12px;
+  background-color: #1c1c1e;
+}
+.body { flex: 1; }
+.title { font-size: 32px; color: #ffffff; font-weight: bold; }
+.sub { font-size: 18px; color: #8e8e93; margin-top: 4px; }
+.line { font-size: 20px; color: #ffffff; margin-bottom: 4px; }
+.body-text { font-size: 16px; color: #8e8e93; }
+.row { flex-direction: row; justify-content: space-between; }
+.btn {
+  flex: 1; height: 72px; margin: 0 5px;
+  align-items: center; justify-content: center;
+  border-radius: 14px; background-color: #2c2c2e;
+}
+.primary { background-color: #ffa626; }
+.btn-text { font-size: 24px; color: #ffffff; }
+</style>

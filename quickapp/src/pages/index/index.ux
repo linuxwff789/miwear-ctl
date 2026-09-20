@@ -27,6 +27,12 @@
         <text class="btn-text">设备信息</text>
       </div>
     </div>
+
+    <div class="row">
+      <div class="btn primary" @click="onNet">
+        <text class="btn-text">联网测试</text>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -35,6 +41,7 @@ import vibrator from '@system.vibrator'
 import brightness from '@system.brightness'
 import device from '@system.device'
 import prompt from '@system.prompt'
+import router from '@system.router'
 
 export default {
   data: {
@@ -68,6 +75,10 @@ export default {
 
   onReset() {
     this.count = 0
+  },
+
+  onNet() {
+    router.push({ uri: 'pages/net' })
   },
 
   onBright() {

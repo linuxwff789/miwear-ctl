@@ -40,6 +40,7 @@ public class WearLink {
     private byte seq = 0;
     private byte cmdSeq = 0;
     private Crypto.Keys keys;
+    private NetProxyBridge net;
 
     /** 能力协商帧（抓包复刻，必须在 apiCode 之前发，否则手表会重启） */
     private static final byte[] HELLO = hex("030001000002020000fc03020020000402001027");
@@ -82,8 +83,17 @@ public class WearLink {
                 byte[] all = acc.toByteArray();
                 int[] consumed = new int[1];
                 List<Framing.Frame> fs = Framing.parse(all, all.length, consumed);
-                synchronized (queue) {
-                    for (Framing.Frame f : fs) {
+                for (Framing.Frame f : fs) {
+                    // 通道 7 = 手表联网：明文原始 IP 包，不需要 ACK
+                    if (f.type == Framing.TYPE_DATA && f.channel() == Framing.CH_NETWORK) {
+                        byte[] ip = f.data();
+                        if (ip.length > 0) {
+                            log.log("← ch7 " + ip.length + "B  " + NetProxyBridge.ipSummary(ip));
+                            if (net != null) net.upstream(ip);
+                        }
+                        continue;
+                    }
+                    synchronized (queue) {
                         log.log("← " + f + (f.seq == (byte) 0xEE ? "   [CRC 错!]" : ""));
                         queue.add(f);
                         queue.notifyAll();
@@ -312,6 +322,28 @@ public class WearLink {
 
         log.log("通知 oyt = " + Crypto.hex(oyt.toByteArray()));
         sendEncrypted(Framing.CH_PB, oyt.toByteArray());
+    }
+
+    // ───────────────── 手表联网（L2 通道 7）─────────────────
+    /**
+     * 启动联网网关：手表自带 TCP/IP 栈，把原始 IP 包丢过来；
+     * 这里用小米自己的 libnetproxy.so 做 NAT，再把回包发回手表。
+     */
+    public void startNetProxy() {
+        if (net == null) net = new NetProxyBridge(log, this::sendNetData);
+        net.start();
+    }
+
+    public void stopNetProxy() { if (net != null) net.stop(); }
+
+    public boolean netProxyRunning() { return net != null && net.isStarted(); }
+
+    /** 把一个 IP 包发回手表（明文，通道 7） */
+    private void sendNetData(byte[] ip) throws Exception {
+        byte[] f = Framing.build(Framing.TYPE_DATA, seq, Framing.l2(Framing.CH_NETWORK, Framing.OP_WRITE, ip));
+        log.log("→ ch7 " + ip.length + "B  " + NetProxyBridge.ipSummary(ip));
+        write(f);
+        seq++;
     }
 
     // ───────────────── 应用管理（module 20）─────────────────

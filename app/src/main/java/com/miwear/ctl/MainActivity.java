@@ -49,6 +49,8 @@ public class MainActivity extends Activity implements WearLink.Log {
         row2.addView(etApi); row2.addView(etSub);
         Button bSend = new Button(this); bSend.setText("发送");
         row2.addView(bSend);
+        Button bNet = new Button(this); bNet.setText("联网");
+        row2.addView(bNet);
         root.addView(row2);
 
         root.addView(label("通知：标题 / 内容 / 包名"));
@@ -89,6 +91,12 @@ public class MainActivity extends Activity implements WearLink.Log {
                                       etTitle.getText().toString().trim(),
                                       etText.getText().toString().trim(),
                                       "MiWear", 1);
+            } catch (Exception e) { log("❌ " + e); }
+        }));
+        bNet.setOnClickListener(v -> bg(() -> {
+            try {
+                if (link == null) { log("先连接"); return; }
+                if (link.netProxyRunning()) link.stopNetProxy(); else link.startNetProxy();
             } catch (Exception e) { log("❌ " + e); }
         }));
         bSend.setOnClickListener(v -> bg(() -> {
@@ -182,6 +190,7 @@ public class MainActivity extends Activity implements WearLink.Log {
                         if (raw != null) { link.rawCall(hex2(raw), 8000); return; }
                         String ap = it.getStringExtra("app_pkg");
                         if (ap != null) { link.appStatus(ap); return; }
+                        if (it.getBooleanExtra("netproxy", false)) { link.startNetProxy(); return; }
                         String nt = it.getStringExtra("notify_title");
                         if (nt != null) {
                             Thread.sleep(1500);
