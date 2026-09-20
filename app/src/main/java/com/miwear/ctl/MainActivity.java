@@ -167,7 +167,11 @@ public class MainActivity extends Activity implements WearLink.Log {
                         if (key.length != 16) { log("auth key 长度错误: " + key.length + " 字节"); return; }
                         link.authenticate(key);
                         // 联网网关不 return：可以接着做后面的动作（如拉起手表应用）
-                        if (it.getBooleanExtra("netproxy", false)) link.startNetProxy();
+                        if (it.getBooleanExtra("netproxy", false)) {
+                            link.startNetProxy();
+                            try { startForegroundService(new android.content.Intent(this, GatewayService.class)); }
+                            catch (Exception e) { log("⚠ 前台服务启动失败（App 可能被冻结）: " + e); }
+                        }
                         String rpkPath = it.getStringExtra("install_rpk");
                         if (rpkPath != null) {
                             java.io.File f = new java.io.File(rpkPath);

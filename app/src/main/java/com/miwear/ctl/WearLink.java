@@ -352,9 +352,11 @@ public class WearLink {
         if (net == null) net = new NetProxyBridge(log, this::sendNetData);
         net.start();
         if (!net.isStarted()) return;
-        // 抓包复刻：先发「网络状态」再发「联网能力」，否则手表不会把 IP 包丢过来
+        // 抓包复刻：先重放官方 App 的初始化序列，再周期性发「网络状态 + 联网能力」
+        sendHexList(NET_INIT, 200);
         new Thread(() -> {
-            for (int i = 0; i < 4; i++) {
+            try { Thread.sleep(3500); } catch (InterruptedException e) { return; }
+            for (int i = 0; i < 6; i++) {
                 try {
                     sendNetStatus();          // module 2 sub 14 (f34.f1=1)
                     Thread.sleep(300);
@@ -401,6 +403,41 @@ public class WearLink {
         log.log("→ ch7 " + ip.length + "B  " + NetProxyBridge.ipSummary(ip));
         write(f);
         seq++;
+    }
+
+    /** 抓包复刻：官方 App 连上后发的初始化序列（手表靠这些才肯把 IP 包走手机） */
+    private static final String[] NET_INIT = {
+        "08021002",                          // 2/2
+        "0802105c2205da03020801",            // 2/92  f58.f1=1
+        "0808101d5200",                      // 8/29
+        "0808101e5207ca010408011003",        // 8/30
+        "0805100a3a00",                      // 5/10
+        "0802100e22059202020804",            // 2/14  f34.f1=4
+        "08021002",                          // 2/2
+        "0802102c2207aa02040a020800",        // 2/44
+        "08021006220aa201070a057a685f636e",  // 2/6   locale zh_cn
+        "0802100e22059202020802",            // 2/14  f34.f1=2
+        "08141000",                          // 20/0  列应用
+        "08121001a201040a02080a",            // 18/1  联网能力
+        "0802100e22059202020801",            // 2/14  f34.f1=1
+    };
+
+    /** 发一串明文 oyt（加密后发出） */
+    public void sendHexList(String[] hexes, int gapMs) {
+        new Thread(() -> {
+            for (String h : hexes) {
+                if (net == null || !net.isStarted()) return;
+                try {
+                    byte[] b = new byte[h.length() / 2];
+                    for (int i = 0; i < b.length; i++)
+                        b[i] = (byte) Integer.parseInt(h.substring(i * 2, i * 2 + 2), 16);
+                    sendEncrypted(Framing.CH_PB, b);
+                    log.log("→ init " + h);
+                    Thread.sleep(gapMs);
+                } catch (InterruptedException ie) { return; }
+                catch (Exception e) { log.log("❌ init 发送失败: " + e); }
+            }
+        }, "net-init").start();
     }
 
     // ───────────────── 应用管理（module 20）─────────────────

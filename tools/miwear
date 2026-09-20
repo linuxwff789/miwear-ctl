@@ -199,6 +199,8 @@ cmd_net() {
     esac
   done
   ensure_key; need_root; need_app
+  su -c "dumpsys deviceidle whitelist +$PKG" >/dev/null 2>&1
+  su -c "am set-standby-bucket $PKG active" >/dev/null 2>&1
   local run="$$-$RANDOM"
   su -c "am force-stop com.mi.health; am force-stop $PKG" 2>/dev/null
   sleep 1
