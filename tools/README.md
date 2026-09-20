@@ -11,7 +11,12 @@ tools/miwear app com.miwear.demo          # 查某个应用在手表上的状态
 tools/miwear uninstall com.miwear.demo    # 卸载（自动查指纹；设备不回执）
 tools/miwear launch com.miwear.demo       # 在手表上启动
 tools/miwear notify "标题" "内容"          # 推通知到手表
+tools/miwear info                         # 手表状态（电量，module 8/29）
+tools/miwear find                         # 找手表：让手表震动/响铃（module 2/18）
+tools/miwear sync com.miwear.demo 1       # 同步手机 App 安装状态（module 20/7）
+tools/miwear msg com.miwear.demo 'hi'     # 给手表快应用发消息（module 20/8）
 tools/miwear raw 08141000                 # 发任意 oyt（加密）并打印应答，调试用
+tools/miwear net [--launch <包名> [uri]]  # 启动手表联网网关（手机侧 libnetproxy.so 做 NAT）
 tools/miwear log -f                       # 跟随 App 日志
 tools/miwear build rpk --install          # 云构建 quickapp 并直接装到手表
 tools/miwear build apk --install          # 云构建 miwear-ctl APK 并安装
@@ -43,6 +48,24 @@ REPO=linuxwff789/miwear-ctl
 原理：`am start` 带 `--es install_rpk/--es list_apps/...` 唤起 `com.miwear.ctl`，
 App 内部完成 SPP 连接 → 认证 → 执行动作，日志写在
 `/data/data/com.miwear.ctl/files/log.txt`，脚本负责等待与展示。
+
+## 已实现的官方 App 能力对照
+
+| 官方能力 | oyt | 我们的命令 | 状态 |
+|---|---|---|---|
+| 通知推送 | `7/0` | `notify` | ✅ |
+| 列表/查询/安装/卸载/启动应用 | `20/0,21,1,3,4` | `apps` `app` `install` `uninstall` `launch` | ✅ |
+| rpk 传输 | `22/0` + MASS ch2 | `install` | ✅ |
+| 手表联网（手机做网关） | `18/1` + ch7 | `net` | ✅ |
+| 手表状态（电量） | `8/29` | `info` | ✅ |
+| 找手表（震动/响铃） | `2/18` | `find` | ✅ |
+| 同步手机 App 安装状态 | `20/7` | `sync` | ✅ |
+| 手机状态回传（锁屏/亮屏） | `23/0→23/1` | 自动应答 | ✅ |
+| 手表快应用 interconnect 消息 | ? | `msg`（发 20/8） | ⚠️ 未打通 |
+
+**`msg` 为什么不通**：官方 App 里 `interconnect` 用的是 **module 23**，而 23 的 sub 只有
+手机状态/手机使用注册/手机 trace/跌倒检测——**没有转发第三方快应用消息**。快应用的
+`@system.interconnect` 需要手机侧**对应 App**（如百度地图）自己实现，不是通用通道。
 
 ## 已知限制
 
