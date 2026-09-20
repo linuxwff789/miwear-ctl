@@ -5,6 +5,8 @@
 #
 # 用法:  miwear <命令> [参数]
 #   status                    体检：root/蓝牙/锁屏/官方App/手表配对/本机 App
+#   serve [start|stop|status] 启停常驻 CLI 服务（认证只做一次，后续命令秒回）
+#   rpc '<json>'               直接向常驻服务发一条 JSON 命令（调试/脚本用）
 #   install <a.rpk>           把 rpk 装到手表（自动停官方 App、自动等结果）
 #   install --build           先云构建 quickapp 再装
 #   apps                      列出手表上已安装的快应用
@@ -23,7 +25,11 @@
 #   log [-n 行数] [-f]        看 App 日志（-f 持续跟随）
 #   build apk|rpk [--install] 触发 GitHub Actions 构建
 #
-# 配置:  ~/.config/miwear/config      MAC=.. / KEY=.. / REPO=..
+# 配置:  ~/.config/miwear/config      MAC=.. / KEY=.. / REPO=.. / PORT=..
+#
+# 两种模式（自动选）：
+#   常驻模式  miwear serve start  → App 里跑个本地 socket 服务，认证只做一次，命令秒回、日志实时流
+#   一次性模式  不开服务 → 每条命令 am start 拉起 App，做完即退（慢，但不用先起服务）
 set -uo pipefail
 
 PKG=com.miwear.ctl
@@ -34,12 +40,17 @@ TMP=${TMPDIR:-/tmp}/miwear
 mkdir -p "$TMP" 2>/dev/null || TMP=$HOME/.miwear-tmp
 mkdir -p "$TMP" 2>/dev/null || true
 
+# ───────── 常驻服务（App 当蓝牙后端；见 CmdServer.java）─────────
+SELF=$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "$0")
+RPC_PY=${MIWEAR_RPC:-$(dirname "$SELF")/miwear_rpc.py}
+
 # ───────── 配置 ─────────
 CONF=${MIWEAR_CONF:-$HOME/.config/miwear/config}
 [ -f "$CONF" ] && . "$CONF"
 MAC=${MAC:-}
 KEY=${KEY:-}
 REPO=${REPO:-linuxwff789/miwear-ctl}
+PORT=${PORT:-38787}
 
 R=$'\033[31m'; G=$'\033[32m'; Y=$'\033[33m'; C=$'\033[36m'; D=$'\033[2m'; N=$'\033[0m'
 die() { echo "${R}✗${N} $*" >&2; exit 1; }
@@ -77,10 +88,48 @@ launch_app() {
   su -c "$cmd" >/dev/null 2>&1 || die "am start 失败"
 }
 
+# ───────── 常驻服务 ─────────
+# 直连 127.0.0.1:PORT；若 SELinux 不允许（少见），自动回退 root 跑 python
+serve_up() { MIWEAR_PORT=$PORT python3 "$RPC_PY" --connect >/dev/null 2>&1; }
+
+rpc_send() {  # rpc_send <json> <timeout秒> [额外参数…]
+  local json=$1 t=$2; shift 2
+  if serve_up; then
+    MIWEAR_PORT=$PORT MIWEAR_CMD="$json" python3 "$RPC_PY" --from-env --port "$PORT" --timeout "$t" "$@"
+    return $?
+  fi
+  need_root
+  local py; py=$(command -v python3)
+  su -c "MIWEAR_CMD=$(q "$json") $(q "$py") $(q "$RPC_PY") --from-env --port $PORT --timeout $t"
+  return $?
+}
+
+# 把 am 风格 extra 转成 JSON 命令（空串 = 不认识）
+extras_json() { python3 "$RPC_PY" --extras "$@" 2>/dev/null; }
+
+okjson() {  # okjson <json键值对…> → 拼成 JSON
+  python3 - "$@" <<'PY'
+import json,sys
+kv={}
+for a in sys.argv[1:]:
+    k,_,v=a.partition('='); kv[k]=v
+print(json.dumps(kv,ensure_ascii=False))
+PY
+}
+
 # 跑一次动作并等结果。失败自动重试一次（SPP 连接偶发失败）
 do_action() {
   local pat=$1 t=$2; shift 2
-  ensure_key; need_root; need_app
+  need_root; need_app
+  # 常驻服务在跑 → 直接走本地 socket（认证已常驻，实时输出）
+  if serve_up; then
+    local js; js=$(extras_json "$@")
+    if [ -n "$js" ]; then
+      if rpc_send "$js" "$t"; then return 0; fi
+      warn "RPC 失败，回退 Intent 模式"
+    fi
+  fi
+  ensure_key
   local run="$$-$RANDOM" attempt
   for attempt in 1 2; do
     su -c "am force-stop com.mi.health; am force-stop $PKG" 2>/dev/null
@@ -115,6 +164,8 @@ cmd_status() {
   else info "auth key 未配置（首次推送时会自动从小米运动健康数据库读取）"; fi
   su -c "ps -A" 2>/dev/null | grep -q com.mi.health \
     && warn "小米运动健康正在运行（推送时会自动停掉）" || ok "官方 App 未运行（SPP 通道空闲）"
+  if serve_up; then ok "常驻 CLI 服务在跑（127.0.0.1:$PORT，命令秒回）"
+  else info "常驻服务未开（miwear serve start 可加速 + 实时日志）"; fi
   info "配置：MAC=$MAC  KEY=${KEY:0:8}…  REPO=$REPO"
 }
 
@@ -141,11 +192,20 @@ cmd_install() {
   fi
   info "安装 $base（$sz 字节）"
 
+  # 常驻服务在跑 → 直接 socket 安装（不用重启 App、不用 am start）
+  if serve_up; then
+    if rpc_send "$(okjson cmd=install path="$dst")" 300; then
+      echo
+      ok "已发送完成。${D}设备对安装只回 L1 ACK，看下手表即可${N}"
+      return 0
+    fi
+    warn "RPC 安装失败，回退 Intent 模式"
+  fi
+
   local run="$$-$RANDOM"
   su -c "am force-stop com.mi.health; am force-stop $PKG" 2>/dev/null
   sleep 1
-  launch_app --es run_id "$run" --es install_rpk "$dst"
-  wait_for "RUN $run" 25 || { warn "App 没起来"; log_dump; return 1; }
+  launch_app --es run_id "$run" --es install_rpk "$dst"  wait_for "RUN $run" 25 || { warn "App 没起来"; log_dump; return 1; }
   if wait_for "rpk 发送完成|❌" 90; then
     log_dump
     echo
@@ -223,6 +283,13 @@ cmd_raw() {
   do_action "应答明文" 40 --es raw_hex "$h"
 }
 
+# 直通：向常驻服务发任意 JSON 命令
+cmd_rpc() {
+  local js=${1:-}; [ -n "$js" ] || die "用法: miwear rpc '<json>'"
+  serve_up || die "常驻服务未运行（miwear serve start）"
+  rpc_send "$js" "${2:-60}" "${@:3}"
+}
+
 # 启动手表联网网关（手机侧跑 libnetproxy.so，把 ch7 的 IP 包做 NAT）
 #   miwear net [--launch <包名> [uri]]   可选：同时拉起手表上的应用
 cmd_net() {
@@ -236,6 +303,18 @@ cmd_net() {
   ensure_key; need_root; need_app
   su -c "dumpsys deviceidle whitelist +$PKG" >/dev/null 2>&1
   su -c "am set-standby-bucket $PKG active" >/dev/null 2>&1
+
+  # 常驻服务在跑 → 直接 socket（网关在服务进程里跑，不会被冻结）
+  if serve_up; then
+    if rpc_send "$(okjson cmd=net launch_pkg="$lp" launch_uri="$lu")" 90; then
+      sleep 1
+      ok "联网网关已启动（常驻服务内运行）"
+      info "手表端发起请求后，用 miwear log -f 看 ch7 流量"
+      return 0
+    fi
+    warn "RPC 启动失败，回退 Intent 模式"
+  fi
+
   local run="$$-$RANDOM"
   su -c "am force-stop com.mi.health; am force-stop $PKG" 2>/dev/null
   sleep 1
@@ -257,7 +336,7 @@ cmd_net() {
 }
 
 # ──────── auth key（从官方 App 数据库自动读）────────
-save_config() { mkdir -p "$(dirname "$CONF")"; { echo "MAC=$MAC"; echo "KEY=$KEY"; echo "REPO=$REPO"; } > "$CONF"; }
+save_config() { mkdir -p "$(dirname "$CONF")"; { echo "MAC=$MAC"; echo "KEY=$KEY"; echo "REPO=$REPO"; echo "PORT=$PORT"; } > "$CONF"; }
 
 # 读官方 App 的 device 表；输出: mac \t key \t model \t name（失败/无则输出空或 NONE）
 read_key_from_db() {
@@ -329,6 +408,40 @@ cmd_key() {
   else info "加 --save 可写入 $CONF"; fi
 }
 
+# ───────── 常驻 CLI 服务 ─────────
+cmd_serve() {
+  local sub=${1:-start}
+  case "$sub" in
+    start|up|on)
+      need_root; need_app; ensure_key
+      if serve_up; then ok "服务已在运行（127.0.0.1:$PORT）"; return 0; fi
+      su -c "am force-stop $PKG" 2>/dev/null
+      sleep 1
+      launch_app --es serve true --ei port "$PORT" --ez autoconnect false
+      local i=0
+      while [ $i -lt 30 ]; do sleep 0.5; serve_up && break; i=$((i+1)); done
+      serve_up || { warn "服务未起来，日志："; log_dump | tail -20; die "启动失败"; }
+      ok "CLI 服务已启动：127.0.0.1:$PORT"
+      info "认证常驻，后续 miwear 命令自动走它（会快很多）"
+      ;;
+    stop|down|off)
+      need_root
+      su -c "am start -n $ACT --ez serve_stop true" >/dev/null 2>&1
+      sleep 1
+      if serve_up; then warn "还在跑？看一下 miwear log"; else ok "已停止"; fi
+      ;;
+    status)
+      if serve_up; then
+        ok "运行中 127.0.0.1:$PORT"
+        rpc_send '{"cmd":"state"}' 8 --raw
+      else
+        warn "未运行（miwear serve start）"
+      fi
+      ;;
+    *) die "用法: miwear serve [start|stop|status]" ;;
+  esac
+}
+
 # ───────── log ─────────
 cmd_log() {
   need_root
@@ -342,6 +455,11 @@ cmd_log() {
   done
   su -c "test -f $LOG" 2>/dev/null || die "还没有日志"
   if [ $follow -eq 1 ]; then
+    if serve_up; then
+      info "实时跟随服务日志（Ctrl-C 退出）…"
+      rpc_send '{"cmd":"subscribe"}' 0 --follow
+      return
+    fi
     info "跟随日志（Ctrl-C 退出）…"
     su -c "tail -f $LOG" | sed -E 's/^(→|←) (DATA|CMD) seq=[0-9]+ ch=[0-9-]+ op=[0-9-]+ len=[0-9]+ .{60,}$/\1 \2 (帧数据略)/'
   else
@@ -435,6 +553,7 @@ for r in d.get('workflow_runs',[]):
 # ───────── 入口 ─────────
 case "${1:-}" in
   status)    shift; cmd_status "$@" ;;
+  serve)     shift; cmd_serve "$@" ;;
   install)   shift; cmd_install "$@" ;;
   apps)      shift; cmd_apps "$@" ;;
   app)       shift; cmd_app "$@" ;;
@@ -448,9 +567,10 @@ case "${1:-}" in
   msg)       shift; cmd_msg "$@" ;;
   sync)      shift; cmd_sync "$@" ;;
   raw)       shift; cmd_raw "$@" ;;
+  rpc)       shift; cmd_rpc "$@" ;;
   net)       shift; cmd_net "$@" ;;
   log)       shift; cmd_log "$@" ;;
   build)     shift; cmd_build "$@" ;;
-  ""|-h|--help|help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//' ;;
+  ""|-h|--help|help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) die "未知命令: $1（试 miwear help）" ;;
 esac

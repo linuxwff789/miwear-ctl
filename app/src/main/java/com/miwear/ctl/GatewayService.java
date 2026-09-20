@@ -29,11 +29,31 @@ public class GatewayService extends Service {
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        // 进程被杀后 START_STICKY 重启会是 null intent → 从 SharedPreferences 恢复
+        boolean serve;
+        String mac, key;
+        int port;
+        if (intent != null) {
+            serve = intent.getBooleanExtra("serve", false);
+            mac = intent.getStringExtra("mac");
+            key = intent.getStringExtra("key");
+            port = intent.getIntExtra("port", CmdServer.DEFAULT_PORT);
+        } else {
+            serve = CmdServer.wasServing(this);
+            mac = CmdServer.savedMac(this);
+            key = CmdServer.savedKey(this);
+            port = CmdServer.savedPort(this);
+        }
+        if (serve) {
+            WearLink.APP = getApplicationContext();
+            CmdServer.start(this, mac, key, port);
+        }
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
         Notification n = b.setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-                .setContentTitle("miwear 网关运行中")
-                .setContentText("手表的网络请求正通过手机转发")
+                .setContentTitle(serve ? "miwear CLI 服务运行中" : "miwear 网关运行中")
+                .setContentText(serve ? "127.0.0.1:" + CmdServer.runningPort() + " · 认证已常驻"
+                                      : "手表的网络请求正通过手机转发")
                 .setOngoing(true)
                 .build();
         try { startForeground(NOTIFY_ID, n); } catch (Exception ignored) {}
@@ -44,6 +64,5 @@ public class GatewayService extends Service {
         try { stopForeground(true); } catch (Exception ignored) {}
         super.onDestroy();
     }
-
     @Override public IBinder onBind(Intent intent) { return null; }
 }

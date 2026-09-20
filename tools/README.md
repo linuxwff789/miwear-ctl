@@ -4,6 +4,7 @@
 
 ```bash
 tools/miwear status                       # 体检：root/蓝牙/锁屏/官方App/手表配对
+tools/miwear serve start                  # 启动常驻 CLI 服务（认证只做一次，后续命令秒回）
 tools/miwear key [--save]                 # 自动读出手表 auth key（来自官方 App 数据库）
 tools/miwear install demo.rpk             # 装 rpk 到手表（自动停官方 App、等结果）
 tools/miwear apps                         # 列出手表上已安装的快应用（含指纹）
@@ -67,6 +68,41 @@ App 内部完成 SPP 连接 → 认证 → 执行动作，日志写在
 `f16` 只在 `isWeChatIncomingCall` 时置 true（`BaseNotifySyncService` 的 `lliVar.p = true`）。
 
 时间字段 f6 官方格式是 `yyyyMMdd'T'HHmmss`。
+
+### 常驻 CLI 服务（`miwear serve`）—— 为什么 App 去不掉
+
+**结论：手表只能通过 Android App 里的 `BluetoothSocket` 连，命令行直连内核 RFCOMM 做不到。**
+
+原因（已逐层验证）：Android 的蓝牙 HCI 是**用户态**实现的 ——
+`/vendor/bin/hw/android.hardware.bluetooth@1.1-service-qti` 独占 `/dev/ttyHS0`，
+内核根本没有 hci_dev（`/sys/class/bluetooth/` 为空）。所以从 Termux 里 connect 内核 RFCOMM 会
+在 `hci_get_route() == NULL` 处直接返回 `EHOSTUNREACH`。
+
+于是把 App 做成**常驻后端**，CLI 通过本地 socket 下令：
+
+```bash
+miwear serve start    # 启动（App 里起一个前台服务 + 127.0.0.1:38787）
+miwear info           # 之后所有命令都走常驻连接：不用 am start、不用重复认证
+miwear serve status   # 看状态（含链路、MAC、端口）
+miwear serve stop     # 停
+```
+
+协议是一行一个 JSON（`nc 127.0.0.1 38787` 可手测）：
+
+```jsonc
+// 客户端 →
+{"cmd":"notify","title":"标题","text":"内容","pkg":"com.termux"}
+{"cmd":"install","path":"/data/data/com.miwear.ctl/files/x.rpk"}
+{"cmd":"raw","hex":"08141000"}
+{"cmd":"subscribe"}          // 只订阅日志流
+// 服务端 →
+{"ev":"log","msg":"..."}   // 实时日志
+{"ev":"done","ok":true}     // 本条命令结束
+```
+
+命令：`link / notify / call / install / apps / app / uninstall / launch / raw / info /
+find / msg / sync / net / netstop / state / reconnect / subscribe / logfile`。
+不开服务也能用 —— 会回退成「每条命令 `am start` 拉 App 一次」的老模式。
 
 ## 已实现的官方 App 能力对照
 

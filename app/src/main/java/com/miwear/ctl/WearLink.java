@@ -69,6 +69,15 @@ public class WearLink {
         log.log("✅ 已连接 (SPP/RFCOMM)");
     }
 
+    /** 连接是否仍然有效（供常驻服务判断是否需要重连） */
+    public boolean isConnected() {
+        try { return running && socket != null && socket.isConnected(); }
+        catch (Exception e) { return false; }
+    }
+
+    /** 是否已完成认证（keys 可用） */
+    public boolean isAuthenticated() { return keys != null; }
+
     public void close() {
         running = false;
         try { if (socket != null) socket.close(); } catch (Exception ignored) {}

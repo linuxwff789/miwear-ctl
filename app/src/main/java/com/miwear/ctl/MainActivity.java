@@ -153,6 +153,28 @@ public class MainActivity extends Activity implements WearLink.Log {
         String k = it.getStringExtra("key");
         if (m != null) etMac.setText(m);
         if (k != null) etKey.setText(k);
+
+        // ── 常驻 CLI 服务（App 作为蓝牙后端，认证只做一次）──
+        if (it.getBooleanExtra("serve_stop", false)) {
+            CmdServer.stop();
+            try { stopService(new android.content.Intent(this, GatewayService.class)); } catch (Exception ignored) {}
+            log("🛑 CLI 服务已停止");
+            return;
+        }
+        if (it.getBooleanExtra("serve", false)) {
+            int port = it.getIntExtra("port", CmdServer.DEFAULT_PORT);
+            try {
+                android.content.Intent si = new android.content.Intent(this, GatewayService.class)
+                        .putExtra("serve", true)
+                        .putExtra("port", port)
+                        .putExtra("mac", etMac.getText().toString().trim())
+                        .putExtra("key", etKey.getText().toString().trim());
+                if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(si); else startService(si);
+                log(CmdServer.isRunning() ? ("✅ CLI 服务已在 127.0.0.1:" + CmdServer.runningPort())
+                                          : "⚠ CLI 服务未起来（端口占用？）");
+            } catch (Exception e) { log("❌ 启动 CLI 服务失败: " + e); }
+            return;
+        }
         if (it.getBooleanExtra("autoconnect", false)) {
             final String mm = etMac.getText().toString().trim();
             final String kk = etKey.getText().toString().trim();
