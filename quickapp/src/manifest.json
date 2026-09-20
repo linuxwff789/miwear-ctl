@@ -1,8 +1,8 @@
 {
   "package": "com.miwear.demo",
   "name": "MiWearDemo",
-  "versionName": "1.2.0",
-  "versionCode": 3,
+  "versionName": "1.3.0",
+  "versionCode": 4,
   "minPlatformVersion": 1000,
   "icon": "/common/logo.png",
   "deviceTypeList": ["watch"],
@@ -14,7 +14,8 @@
     { "name": "system.storage" },
     { "name": "system.brightness" },
     { "name": "system.fetch" },
-    { "name": "system.network" }
+    { "name": "system.network" },
+    { "name": "system.interconnect" }
   ],
   "config": {
     "logLevel": "log",

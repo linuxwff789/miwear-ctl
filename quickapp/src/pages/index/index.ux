@@ -33,6 +33,10 @@
         <text class="btn-text">联网测试</text>
       </div>
     </div>
+
+    <div class="card">
+      <text class="sub">手机消息：{{ msg }}</text>
+    </div>
   </div>
 </template>
 
@@ -42,16 +46,30 @@ import brightness from '@system.brightness'
 import device from '@system.device'
 import prompt from '@system.prompt'
 import router from '@system.router'
+import interconnect from '@system.interconnect'
 
 export default {
   data: {
     count: 0,
     subtitle: '自制快应用 · 直连安装',
-    bright: 0
+    bright: 0,
+    msg: '（等待手机发消息）'
   },
 
   onInit() {
     console.log('[page] onInit')
+    try {
+      const conn = interconnect.instance()
+      this.conn = conn
+      conn.onmessage = (data) => {
+        console.log('[interconnect] ' + data.data)
+        this.msg = String(data.data)
+        try { vibrator.vibrate({ mode: 'short' }) } catch (e) {}
+      }
+    } catch (e) {
+      console.log('interconnect failed: ' + e)
+      this.msg = '(interconnect 不可用)'
+    }
   },
 
   onReady() {
