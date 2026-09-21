@@ -788,6 +788,6 @@ case "${1:-}" in
   net)       shift; cmd_net "$@" ;;
   log)       shift; cmd_log "$@" ;;
   build)     shift; cmd_build "$@" ;;
-  ""|-h|--help|help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//' ;;
+  ""|-h|--help|help) sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) die "未知命令: $1（试 miwear help）" ;;
 esac

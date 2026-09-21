@@ -954,7 +954,7 @@ public class WearLink {
             }
         }
         log.log("  🔋 电量 = " + battery + "%");
-        String cs = chargeStatus == 1 ? "充电中" : chargeStatus == 0 ? "未充电" : ("未知(" + chargeStatus + ")");
+        String cs = chargeStatus == 1 ? "充电中" : chargeStatus == 0 ? "未充电" : "未充电(2)";
         log.log("  ⚡ 充电 = " + cs + (state == 3 ? "，已充满" : ""));
         if (ts > 0) log.log("  最近充电时间 = " + new java.util.Date(ts * 1000));
         return new int[]{battery, chargeStatus, state};
@@ -989,6 +989,15 @@ public class WearLink {
         if (pt == null) { log.log("module " + mod + " sub " + sub + ": (无应答)"); return null; }
         String t = tree(pt, 1);
         log.log("module " + mod + " sub " + sub + " 应答:\n" + t);
+        if (mod == 2 && sub == 62) {   // 存储：f44.f1 / f44.f2（字节）
+            for (PB.F f4 : PB.parse(pt)) {
+                if (f4.field != 44 || f4.bytes == null) continue;
+                for (PB.F g : PB.parse(f4.bytes))
+                    if (g.wire == 0)
+                        log.log("  存储 f" + g.field + " = " + g.varint + " B ≈ "
+                              + String.format("%.1f", g.varint / 1048576.0) + " MB");
+            }
+        }
         return t;
     }
 
