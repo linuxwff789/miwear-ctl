@@ -6,7 +6,9 @@
 tools/miwear status                       # 体检：root/蓝牙/锁屏/官方App/手表配对
 tools/miwear serve start                  # 启动常驻服务（后台静默；认证只做一次，后续命令 ~0.3s）
 tools/miwear serve start --quiet          # 同上但不要常驻通知
-tools/miwear key [--save]                 # 自动读出手表 auth key（来自官方 App 数据库）
+tools/miwear key [--save]                 # 读出手表 auth key（来自官方 App 数据库）
+tools/miwear bind --probe                 # 查手表是否允许「本地绑定」（不依赖官方 App）
+tools/miwear bind --yes                   # 本地 ECDH 绑定 → 生成全新 auth key 并保存
 tools/miwear install demo.rpk             # 装 rpk 到手表（自动停官方 App、等结果）
 tools/miwear apps                         # 列出手表上已安装的快应用（含指纹）
 tools/miwear app com.miwear.demo          # 查某个应用在手表上的状态
@@ -25,9 +27,9 @@ tools/miwear build rpk --install          # 云构建 quickapp 并直接装到�
 tools/miwear build apk --install          # 云构建 miwear-ctl APK 并安装
 ```
 
-### auth key 不用手填
+### auth key 从哪来
 
-手表 MAC 和 `encrypt_key` 会自动获取：
+**方式 A（默认，需要官方 App 装过）**：
 
 - **MAC**：从已配对设备里找名字含 `watch/手环/手表` 的
 - **KEY**：把 `/data/data/com.mi.health/databases/device_db` 拷出来，
@@ -36,7 +38,23 @@ tools/miwear build apk --install          # 云构建 miwear-ctl APK 并安装
 - 首次执行需要认证的命令时自动推导并写入 `~/.config/miwear/config`；
   也可手动 `tools/miwear key --save`
 
-> 前提：手表当初是用「小米运动健康」配对过的（密钥由绑定过程生成并存在它库里）。
+**方式 B（`miwear bind`，不需要官方 App）**：
+
+auth key 是**绑定（pairing）时**手机与手表做 ECDH、再 HKDF 出来的 16 字节随机值。
+我们复刻了官方 `com.xiaomi.device.binder.LocalWearBinderV2` 的纯本地流程
+（apiCode 17 getBindInfo → 18 verifyDevice → ECDH → 19 confirmOOB → 25 sendBindResult），
+全程不经小米服务器，也不读官方 App：
+
+```bash
+miwear bind --probe        # 先看手表是否允许（未绑定时才会返回 verifyMode=2）
+miwear bind --yes          # 真绑：给手表写入一个全新 auth key，并存进 ~/.config/miwear/config
+```
+
+⚠️ 两个前提/后果：
+- 手表**必须处于未绑定状态**（刚恢复出厂，或在官方 App 里解绑过），否则 apiCode 17 返回
+  `error=1 device have bound`；
+- 绑定成功后官方 App（小米运动健康）就用旧 key，**连不上手表了**；要回到官方 App
+  得先在官方 App 里重新配对（手表端会重新绑）。
 
 配置放 `~/.config/miwear/config`（可选）：
 

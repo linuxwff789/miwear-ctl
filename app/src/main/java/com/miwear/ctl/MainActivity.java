@@ -184,6 +184,23 @@ public class MainActivity extends Activity implements WearLink.Log {
                     link = new WearLink(this);
                     link.connect(mm);
                     link.handshake();
+                    if (it.getBooleanExtra("bind_probe", false) || it.getBooleanExtra("bind_now", false)) {
+                        WearLink.BindInfo bi = link.getBindInfo(it.getStringExtra("bind_userid"));
+                        log("bindInfo: " + bi);
+                        if (it.getBooleanExtra("bind_now", false)) {
+                            if (bi.error == 1) { log("❌ 设备已绑定（先解绑/恢复出厂）"); return; }
+                            if (bi.error >= 0) { log("❌ 查询失败 error=" + bi.error); return; }
+                            if (bi.verifyMode != 2) { log("❌ 不支持本地绑定 verifyMode=" + bi.verifyMode); return; }
+                            byte[] nk = link.localBind(it.getStringExtra("bind_userid"),
+                                    it.getStringExtra("bind_phoneid"), bi, 20000);
+                            log("BINDKEY " + Crypto.hex(nk));
+                        } else if (bi.verifyMode == 2) {
+                            log("✅ 支持本地绑定");
+                        } else if (bi.error == 1) {
+                            log("⚠ 设备已绑定");
+                        }
+                        return;
+                    }
                     if (autoAuth) {
                         byte[] key = hex2(kk);
                         if (key.length != 16) { log("auth key 长度错误: " + key.length + " 字节"); return; }

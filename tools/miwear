@@ -12,7 +12,9 @@
 #   install --build           先云构建 quickapp 再装
 #   apps                      列出手表上已安装的快应用
 #   app <包名>                查询某个应用在手表上的状态
-#   key [--save]              从官方 App 数据库自动读取 auth key（--save 写入配置）
+#   key [--save]              从官方 App 数据库读取 auth key（--save 写入配置）
+#   bind --probe              查手表是否允许本地绑定（不依赖官方 App）
+#   bind --yes                本地 ECDH 绑定 → 生成全新 auth key 并保存（会覆盖手表上的绑定）
 #   uninstall <包名> [指纹]   卸载（设备不回执，看手表界面）
 #   launch <包名> [uri]       在手表上启动应用（设备不回执）
 #   notify <标题> <内容> [包]  推一条普通通知到手表（短震动）
@@ -409,6 +411,61 @@ cmd_key() {
   else info "加 --save 可写入 $CONF"; fi
 }
 
+# ───────── 本地绑定（自造 auth key，不依赖官方 App）─────────
+#   miwear bind --probe            只查手表是否允许本地绑定（安全，不改任何东西）
+#   miwear bind --yes [--userid N] [--phoneid X]   真正绑定并保存新 key
+cmd_bind() {
+  local probe=0 yes=0 uid="" phoneid=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --probe) probe=1; shift ;;
+      --yes) yes=1; shift ;;
+      --userid) uid=$2; shift 2 ;;
+      --phoneid) phoneid=$2; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  need_root; need_app
+  [ -n "${MAC:-}" ] || MAC=$(detect_mac)
+  [ -n "$MAC" ] || die "没找到手表 MAC（先用官方 App 配对，或写进 $CONF）"
+
+  if [ $probe -eq 0 ] && [ $yes -ne 1 ]; then
+    warn "这会和手表做一次本地 ECDH 绑定，给手表写入【全新的 auth key】"
+    warn "之后官方 App（小米运动健康）将无法再连手表，除非重新配对"
+    die "确认无误请加 --yes"
+  fi
+
+  local cmd=bind; [ $probe -eq 1 ] && cmd=bindprobe
+  local js; js=$(okjson cmd="$cmd" userid="$uid" phoneid="$phoneid")
+  local out=""
+  if serve_up; then
+    out=$(rpc_send "$js" 45) || true
+  else
+    local run="$$-$RANDOM" ex="--ez bind_now true"
+    [ $probe -eq 1 ] && ex="--ez bind_probe true"
+    su -c "am force-stop com.mi.health; am force-stop $PKG" 2>/dev/null
+    sleep 1
+    launch_app --es run_id "$run" $ex --es bind_userid "$uid" --es bind_phoneid "$phoneid"
+    if ! wait_for "RUN $run" 25; then warn "App 没起来"; log_dump; return 1; fi
+    sleep 22
+    out=$(log_dump)
+  fi
+  printf '%s\n' "$out"
+
+  if [ $probe -eq 1 ]; then
+    if printf '%s' "$out" | grep -q "支持本地 ECDH 绑定"; then ok "手表允许本地绑定"; else warn "看上面的日志"; fi
+    return 0
+  fi
+
+  local k
+  k=$(printf '%s' "$out" | sed -nE 's/.*"key"[[:space:]]*:[[:space:]]*"([0-9a-fA-F]{32})".*/\1/p' | head -1)
+  [ -z "$k" ] && k=$(printf '%s' "$out" | sed -nE 's/.*BINDKEY ([0-9a-fA-F]{32}).*/\1/p' | head -1)
+  [ -n "$k" ] || die "没拿到新 key（看上面的日志）"
+  KEY=$k; save_config
+  ok "新 auth key = $KEY"
+  info "已写入 $CONF —— 以后不再依赖官方 App 的密钥"
+}
+
 # ───────── 常驻 CLI 服务 ─────────
 # 静默启动（界面不出现）：fgs=带常驻通知（稳）/ bg=连通知都不要
 svc_start() {
@@ -595,6 +652,7 @@ case "${1:-}" in
   apps)      shift; cmd_apps "$@" ;;
   app)       shift; cmd_app "$@" ;;
   key)       shift; cmd_key "$@" ;;
+  bind)      shift; cmd_bind "$@" ;;
   uninstall) shift; cmd_uninstall "$@" ;;
   launch)    shift; cmd_launch "$@" ;;
   notify)    shift; cmd_notify "$@" ;;

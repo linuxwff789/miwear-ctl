@@ -7,11 +7,22 @@ import android.bluetooth.BluetoothSocket;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.math.BigInteger;
+import java.security.KeyFactory;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.security.interfaces.ECPublicKey;
+import java.security.spec.ECGenParameterSpec;
+import java.security.spec.ECParameterSpec;
+import java.security.spec.ECPoint;
+import java.security.spec.ECPublicKeySpec;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import javax.crypto.KeyAgreement;
 
 /**
  * REDMI Watch 5 直连客户端（不依赖小米运动健康）
@@ -274,6 +285,199 @@ public class WearLink {
         }
         log.log("confirm 应答: " + (c == null ? "(无)" : Crypto.hex(c.data())));
         return keys;
+    }
+
+    // ───────────────────────── 本地绑定（自造 auth key，不依赖官方 App）─────────────────────────
+    /**
+     * 逆向自官方 App 的 com.xiaomi.device.binder.LocalWearBinderV2：
+     *   1) apiCode 17 getBindInfo  → 设备回 verifyMode / oobMode（未绑定才允许）
+     *   2) apiCode 18 verifyDevice → 我们发 ECDH 公钥，设备回 公钥 + 签名 + 随机数
+     *   3) 本地 ECDH + HKDF("miwear-bind") → 全新的 auth key（okm[40:56]）
+     *   4) apiCode 19 confirmOOB   → 用共享密钥给 appRandom 签名，设备确认并落盘
+     *   5) apiCode 25 sendBindResult → 加密发送用户信息
+     * 全程明文（未认证），不经小米服务器。
+     */
+    public static final class BindInfo {
+        public int verifyMode = -1, oobMode = -1, error = -1;
+        public String mac, model, did, f2, f3;
+        public byte[] h;
+        public String toString() {
+            return "verifyMode=" + verifyMode + " oobMode=" + oobMode + " error=" + error
+                 + " mac=" + mac + " model=" + model + " did=" + did
+                 + " f2=" + f2 + " f3=" + f3 + " h=" + (h == null ? "-" : Crypto.hex(h));
+        }
+    }
+
+    private static byte[] bytesOf(List<PB.F> fs, int n) {
+        if (fs == null) return null;
+        for (PB.F f : fs) if (f.field == n && f.wire == 2) return f.bytes;
+        return null;
+    }
+
+    private static long numOf(List<PB.F> fs, int n, long def) {
+        if (fs == null) return def;
+        for (PB.F f : fs) if (f.field == n && f.wire == 0) return f.varint;
+        return def;
+    }
+
+    private static String strOf(List<PB.F> fs, int n) {
+        byte[] b = bytesOf(fs, n);
+        if (b == null) return null;
+        try { return new String(b, "UTF-8"); } catch (Exception e) { return null; }
+    }
+
+    /** 发一条明文 oyt（module/sub + payload）并等一个 DATA/CH_PB 明文应答 */
+    private byte[] unauthCall(int mod, int sub, byte[] payload, long timeoutMs) throws Exception {
+        ByteArrayOutputStream o = new ByteArrayOutputStream();
+        PB.num(o, 1, mod);
+        PB.num(o, 2, sub);
+        if (payload != null && payload.length > 0) PB.bytes(o, 3, payload);
+        synchronized (queue) { queue.clear(); }
+        sendData(Framing.CH_PB, Framing.OP_WRITE, o.toByteArray());
+        long end = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < end) {
+            Framing.Frame f = await((byte) -1, 400);
+            if (f == null) continue;
+            if (f.type == Framing.TYPE_DATA && f.channel() == Framing.CH_PB) {
+                log.log("← 明文 " + Crypto.hex(f.data()));
+                return f.data();
+            }
+        }
+        return null;
+    }
+
+    /** apiCode 17：查询绑定信息。userId 可为空。 */
+    public BindInfo getBindInfo(String userId) throws Exception {
+        ByteArrayOutputStream xc = new ByteArrayOutputStream();
+        PB.num(xc, 1, 0);                                   // checkDynamicCode = false
+        if (userId != null && !userId.isEmpty()) PB.bytes(xc, 2, md5(userId.getBytes("UTF-8")));
+        ByteArrayOutputStream ua = new ByteArrayOutputStream();
+        PB.bytes(ua, 11, xc.toByteArray());                 // ua0.f11 = xc0
+        byte[] r = unauthCall(1, 17, ua.toByteArray(), 10000);
+        if (r == null) throw new IllegalStateException("设备无应答(apiCode 17)");
+        List<PB.F> uaf = PB.parse(bytesOf(PB.parse(r), 3));
+        BindInfo bi = new BindInfo();
+        long err = numOf(uaf, 3, -1);
+        if (err >= 0) { bi.error = (int) err; return bi; }
+        byte[] mbb = bytesOf(uaf, 12);
+        if (mbb == null) throw new IllegalStateException("apiCode17 无 mb0: " + Crypto.hex(r));
+        List<PB.F> mb = PB.parse(mbb);
+        bi.error = -1;
+        bi.verifyMode = (int) numOf(mb, 1, -1);
+        bi.f2 = strOf(mb, 2); bi.mac = strOf(mb, 3); bi.model = strOf(mb, 4);
+        bi.oobMode = (int) numOf(mb, 5, -1);
+        bi.h = bytesOf(mb, 6);
+        bi.did = strOf(mb, 7); bi.f3 = bi.did;
+        return bi;
+    }
+
+    /** 走完 18/19/25，返回新的 16 字节 auth key。 */
+    public byte[] localBind(String userId, String phoneId, BindInfo bi, long timeoutMs) throws Exception {
+        KeyPairGenerator g = KeyPairGenerator.getInstance("EC");
+        g.initialize(new ECGenParameterSpec("secp256r1"));
+        KeyPair kp = g.generateKeyPair();
+        byte[] ourPub = rawPub((ECPublicKey) kp.getPublic());
+        String mac = bi.mac == null ? "" : bi.mac.toUpperCase(java.util.Locale.ENGLISH);
+        String appDeviceId = md5Hex((phoneId + mac + (userId == null || userId.isEmpty() ? "null" : userId)).getBytes("UTF-8"));
+
+        ByteArrayOutputStream sb = new ByteArrayOutputStream();
+        PB.str(sb, 1, appDeviceId);
+        PB.bytes(sb, 2, ourPub);
+        ByteArrayOutputStream ua = new ByteArrayOutputStream();
+        PB.bytes(ua, 17, sb.toByteArray());
+        byte[] r = unauthCall(1, 18, ua.toByteArray(), timeoutMs);
+        if (r == null) throw new IllegalStateException("设备无应答(apiCode 18)");
+        List<PB.F> uaf = PB.parse(bytesOf(PB.parse(r), 3));
+        long err = numOf(uaf, 3, -1);
+        if (err >= 0) throw new IllegalStateException("verifyDevice 错误码 " + err);
+        List<PB.F> yb = PB.parse(bytesOf(uaf, 18));
+        byte[] devPub = bytesOf(yb, 1), devSign = bytesOf(yb, 2), devRandom = bytesOf(yb, 3);
+        if (devPub == null || devSign == null || devRandom == null)
+            throw new IllegalStateException("apiCode18 应答字段缺失: " + Crypto.hex(r));
+
+        byte[] shared = ecdh(kp.getPrivate(), devPub);
+        byte[] expect = Crypto.hmac(shared, devRandom);
+        log.log("设备签名校验: " + (java.util.Arrays.equals(expect, devSign) ? "✅ 通过" : "❌ 不匹配"));
+        if (!java.util.Arrays.equals(expect, devSign)) throw new IllegalStateException("设备身份校验失败");
+
+        byte[] appRandom = new byte[16]; new SecureRandom().nextBytes(appRandom);
+        byte[] okm = Crypto.Keys.deriveBind(shared, appRandom, devRandom);
+        byte[] authKey = java.util.Arrays.copyOfRange(okm, 40, 56);
+        log.log("🔑 新 auth key = " + Crypto.hex(authKey));
+
+        // apiCode 19 confirmOOB
+        ByteArrayOutputStream pbb = new ByteArrayOutputStream();
+        PB.bytes(pbb, 1, appRandom);
+        PB.bytes(pbb, 2, Crypto.hmac(shared, appRandom));
+        ua = new ByteArrayOutputStream(); PB.bytes(ua, 19, pbb.toByteArray());
+        byte[] r2 = unauthCall(1, 19, ua.toByteArray(), timeoutMs);
+        log.log("confirmOOB 应答: " + (r2 == null ? "(无)" : Crypto.hex(r2)));
+
+        // apiCode 25 sendBindResult
+        ByteArrayOutputStream id0 = new ByteArrayOutputStream();
+        PB.num(id0, 1, 0);
+        PB.f32(id0, 2, (float) android.os.Build.VERSION.SDK_INT);
+        PB.str(id0, 3, android.os.Build.MODEL);
+        ByteArrayOutputStream bc0 = new ByteArrayOutputStream();
+        PB.str(bc0, 1, userId == null ? "" : userId);
+        PB.bytes(bc0, 2, id0.toByteArray());
+        byte[] iv = new byte[]{16,17,18,19,20,21,22,23,24,25,26,27};
+        byte[] enc = Crypto.ccm(true, java.util.Arrays.copyOfRange(okm, 16, 32), iv,
+                                bc0.toByteArray(), 32, "bind-data".getBytes("UTF-8"));
+        if (enc == null) throw new IllegalStateException("bind-data 加密失败");
+        ByteArrayOutputStream ucb = new ByteArrayOutputStream();
+        PB.bytes(ucb, 1, enc);
+        ua = new ByteArrayOutputStream(); PB.bytes(ua, 29, ucb.toByteArray());
+        byte[] r3 = unauthCall(1, 25, ua.toByteArray(), timeoutMs);
+        log.log("sendBindResult 应答: " + (r3 == null ? "(无)" : Crypto.hex(r3)));
+        return authKey;
+    }
+
+    private static byte[] md5(byte[] b) throws Exception {
+        return MessageDigest.getInstance("MD5").digest(b);
+    }
+
+    private static String md5Hex(byte[] b) throws Exception {
+        StringBuilder s = new StringBuilder();
+        for (byte x : md5(b)) s.append(String.format("%02x", x));
+        return s.toString();
+    }
+
+    private static void put32(byte[] dst, int off, BigInteger v) {
+        byte[] b = v.toByteArray();
+        if (b.length == 32) System.arraycopy(b, 0, dst, off, 32);
+        else if (b.length == 33) System.arraycopy(b, 1, dst, off, 32);
+        else if (b.length < 32) System.arraycopy(b, 0, dst, off + 32 - b.length, b.length);
+        else System.arraycopy(b, b.length - 32, dst, off, 32);
+    }
+
+    /** 未压缩点去掉 0x04 前缀 = 64 字节（和官方 itn.l 一致） */
+    private static byte[] rawPub(ECPublicKey k) {
+        byte[] o = new byte[64];
+        put32(o, 0, k.getW().getAffineX());
+        put32(o, 32, k.getW().getAffineY());
+        return o;
+    }
+
+    private static ECParameterSpec p256() throws Exception {
+        java.security.AlgorithmParameters ap = java.security.AlgorithmParameters.getInstance("EC");
+        ap.init(new ECGenParameterSpec("secp256r1"));
+        return ap.getParameterSpec(ECParameterSpec.class);
+    }
+
+    private static byte[] ecdh(java.security.PrivateKey priv, byte[] devPub64) throws Exception {
+        ECParameterSpec params = p256();
+        byte[] enc = new byte[65];
+        enc[0] = 4;
+        System.arraycopy(devPub64, 0, enc, 1, 64);
+        ECPoint pt = new ECPoint(new BigInteger(1, java.util.Arrays.copyOfRange(enc, 1, 33)),
+                                 new BigInteger(1, java.util.Arrays.copyOfRange(enc, 33, 65)));
+        java.security.PublicKey pk = KeyFactory.getInstance("EC")
+                .generatePublic(new ECPublicKeySpec(pt, params));
+        KeyAgreement ka = KeyAgreement.getInstance("ECDH");
+        ka.init(priv);
+        ka.doPhase(pk, true);
+        return ka.generateSecret();
     }
 
     /** 从 rpk 的 manifest.json 里取字段 */

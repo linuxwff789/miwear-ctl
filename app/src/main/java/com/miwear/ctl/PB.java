@@ -58,4 +58,20 @@ public final class PB {
     public static void bytes(ByteArrayOutputStream o, int field, byte[] b) {
         key(o, field, 2); varint(o, b.length); o.write(b, 0, b.length);
     }
+
+    /** 写 float（wire type 5，小端 fixed32）—— 绑定时 id0.f2 = SDK_INT */
+    public static void f32(ByteArrayOutputStream o, int field, float v) {
+        key(o, field, 5);
+        int bits = Float.floatToIntBits(v);
+        o.write(bits & 0xFF); o.write((bits >>> 8) & 0xFF);
+        o.write((bits >>> 16) & 0xFF); o.write((bits >>> 24) & 0xFF);
+    }
+
+    /** 写 varint 字段 */
+    public static void num(ByteArrayOutputStream o, int field, long v) {
+        key(o, field, 0); varint(o, v);
+    }
+
+    /** 写嵌套消息（等价于 bytes） */
+    public static void msg(ByteArrayOutputStream o, int field, byte[] b) { bytes(o, field, b); }
 }

@@ -58,8 +58,13 @@ public final class Crypto {
      * 返回 ciphertext ‖ mac(4B)
      */
     public static byte[] ccm(boolean encrypt, byte[] key, byte[] nonce, byte[] in, int macBits) {
+        return ccm(encrypt, key, nonce, in, macBits, null);
+    }
+
+    /** 带 AAD 的版本（绑定流程 apiCode 25 用 aad="bind-data"） */
+    public static byte[] ccm(boolean encrypt, byte[] key, byte[] nonce, byte[] in, int macBits, byte[] aad) {
         CCMBlockCipher c = new CCMBlockCipher(new AESEngine());
-        c.init(encrypt, new AEADParameters(new KeyParameter(key), macBits, nonce, null));
+        c.init(encrypt, new AEADParameters(new KeyParameter(key), macBits, nonce, aad));
         byte[] out = new byte[c.getOutputSize(in.length)];
         int n = c.processBytes(in, 0, in.length, out, 0);
         try { n += c.doFinal(out, n); } catch (Exception e) { return null; }
@@ -93,6 +98,16 @@ public final class Crypto {
             byte[] okm = hkdf(salt, secret, "miwear-auth".getBytes(), 64);
             return new Keys(Arrays.copyOfRange(okm, 0, 16), Arrays.copyOfRange(okm, 16, 32),
                             Arrays.copyOfRange(okm, 32, 36), Arrays.copyOfRange(okm, 36, 40));
+        }
+
+        /**
+         * 本地绑定（pairing）的密钥派生 —— 逆向自 LocalWearBinderV2.q()：
+         *   okm = HKDF(ikm=ECDH共享密钥, salt=appRandom||deviceRandom, info="miwear-bind", 64)
+         *   [0:16]=bindDeviceKey [16:32]=bindAppKey [32:36]/[36:40]=IV [40:56]=auth key
+         */
+        public static byte[] deriveBind(byte[] shared, byte[] appRandom, byte[] deviceRandom)
+                throws GeneralSecurityException {
+            return hkdf(concat(appRandom, deviceRandom), shared, "miwear-bind".getBytes(), 64);
         }
     }
 

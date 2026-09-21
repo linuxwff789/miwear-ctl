@@ -371,6 +371,48 @@ public class CmdServer implements WearLink.Log {
                     if (link != null) link.stopNetProxy();
                     return null;
                 }
+                case "bindprobe": {
+                    closeLink();
+                    WearLink l = new WearLink(this);
+                    try {
+                        l.connect(mac);
+                        WearLink.BindInfo bi = l.getBindInfo(j.optString("userid", ""));
+                        log("bindInfo: " + bi);
+                        if (bi.error == 1) log("→ 设备已绑定（error=1），需先解绑/恢复出厂才能重新绑定");
+                        else if (bi.error >= 0) log("→ 查询出错 error=" + bi.error);
+                        else if (bi.verifyMode == 2) log("→ 支持本地 ECDH 绑定 ✅（可用 miwear bind --yes）");
+                        else if (bi.verifyMode == 1) log("→ 只支持 PSK/服务器绑定 ❌");
+                        else log("→ 未知 verifyMode=" + bi.verifyMode);
+                    } finally {
+                        l.close();
+                    }
+                    return null;
+                }
+                case "bind": {
+                    String uid = j.optString("userid", "");
+                    String phoneId = j.optString("phoneid", "");
+                    if (phoneId.isEmpty()) {
+                        try {
+                            phoneId = android.provider.Settings.Secure.getString(
+                                    ctx.getContentResolver(), android.provider.Settings.Secure.ANDROID_ID);
+                        } catch (Exception ignored) {}
+                    }
+                    if (phoneId == null) phoneId = "";
+                    closeLink();
+                    WearLink l = new WearLink(this);
+                    try {
+                        l.connect(mac);
+                        WearLink.BindInfo bi = l.getBindInfo(uid);
+                        log("bindInfo: " + bi);
+                        if (bi.error == 1) throw new IllegalStateException("设备已绑定，请先在官方 App 里解绑或恢复出厂后再试");
+                        if (bi.error >= 0) throw new IllegalStateException("查询绑定信息失败 error=" + bi.error);
+                        if (bi.verifyMode != 2) throw new IllegalStateException("设备不支持本地绑定 verifyMode=" + bi.verifyMode);
+                        byte[] k = l.localBind(uid, phoneId, bi, 20000);
+                        return "{\"key\":" + JSONObject.quote(Crypto.hex(k)) + "}";
+                    } finally {
+                        l.close();
+                    }
+                }
                 default:
                     throw new IllegalStateException("未知命令: " + cmd);
             }
