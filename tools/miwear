@@ -436,6 +436,9 @@ cmd_bind() {
   fi
 
   local cmd=bind; [ $probe -eq 1 ] && cmd=bindprobe
+  # 手表 SPP 通道会被官方 App 占用，先停掉
+  su -c "am force-stop com.mi.health" 2>/dev/null
+  sleep 1
   local js; js=$(okjson cmd="$cmd" userid="$uid" phoneid="$phoneid")
   local out=""
   if serve_up; then
@@ -443,7 +446,7 @@ cmd_bind() {
   else
     local run="$$-$RANDOM" ex="--ez bind_now true"
     [ $probe -eq 1 ] && ex="--ez bind_probe true"
-    su -c "am force-stop com.mi.health; am force-stop $PKG" 2>/dev/null
+    su -c "am force-stop $PKG" 2>/dev/null
     sleep 1
     launch_app --es run_id "$run" $ex --es bind_userid "$uid" --es bind_phoneid "$phoneid"
     if ! wait_for "RUN $run" 25; then warn "App 没起来"; log_dump; return 1; fi

@@ -376,6 +376,7 @@ public class CmdServer implements WearLink.Log {
                     WearLink l = new WearLink(this);
                     try {
                         l.connect(mac);
+                        l.handshake();
                         WearLink.BindInfo bi = l.getBindInfo(j.optString("userid", ""));
                         log("bindInfo: " + bi);
                         if (bi.error == 1) log("→ 设备已绑定（error=1），需先解绑/恢复出厂才能重新绑定");
@@ -402,6 +403,7 @@ public class CmdServer implements WearLink.Log {
                     WearLink l = new WearLink(this);
                     try {
                         l.connect(mac);
+                        l.handshake();
                         WearLink.BindInfo bi = l.getBindInfo(uid);
                         log("bindInfo: " + bi);
                         if (bi.error == 1) throw new IllegalStateException("设备已绑定，请先在官方 App 里解绑或恢复出厂后再试");
