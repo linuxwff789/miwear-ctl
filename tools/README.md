@@ -7,8 +7,12 @@ tools/miwear status                       # 体检：root/蓝牙/锁屏/官方Ap
 tools/miwear serve start                  # 启动常驻服务（后台静默；认证只做一次，后续命令 ~0.3s）
 tools/miwear serve start --quiet          # 同上但不要常驻通知
 tools/miwear key [--save]                 # 读出手表 auth key（来自官方 App 数据库）
+tools/miwear key --set <32位hex>          # 手动指定 auth key
+
 tools/miwear bind --probe                 # 查手表是否允许「本地绑定」（不依赖官方 App）
 tools/miwear bind --yes                   # 本地 ECDH 绑定 → 生成全新 auth key 并保存
+tools/miwear reset --yes                  # 解绑/恢复出厂（ERASE_ALL，清空手表）
+tools/miwear rebind --yes                 # 一键：解绑 → 等重启 → 本地重绑生成新 key
 tools/miwear install demo.rpk             # 装 rpk 到手表（自动停官方 App、等结果）
 tools/miwear apps                         # 列出手表上已安装的快应用（含指纹）
 tools/miwear app com.miwear.demo          # 查某个应用在手表上的状态
@@ -38,7 +42,7 @@ tools/miwear build apk --install          # 云构建 miwear-ctl APK 并安装
 - 首次执行需要认证的命令时自动推导并写入 `~/.config/miwear/config`；
   也可手动 `tools/miwear key --save`
 
-**方式 B（`miwear bind`，不需要官方 App）**：
+**方式 B（`miwear rebind`，不需要官方 App）**：
 
 auth key 是**绑定（pairing）时**手机与手表做 ECDH、再 HKDF 出来的 16 字节随机值。
 我们复刻了官方 `com.xiaomi.device.binder.LocalWearBinderV2` 的纯本地流程
@@ -46,15 +50,19 @@ auth key 是**绑定（pairing）时**手机与手表做 ECDH、再 HKDF 出来�
 全程不经小米服务器，也不读官方 App：
 
 ```bash
-miwear bind --probe        # 先看手表是否允许（未绑定时才会返回 verifyMode=2）
+miwear rebind --yes        # 解绑(恢复出厂) + 等手表重启 + 本地重绑，一步到位
+# 或者分步：
+miwear reset --yes         # 解绑（官方 DeviceBindManager 里的 ERASE_ALL）
+miwear bind --probe        # 看手表是否已进入可绑定状态（verifyMode=2）
 miwear bind --yes          # 真绑：给手表写入一个全新 auth key，并存进 ~/.config/miwear/config
 ```
 
-⚠️ 两个前提/后果：
-- 手表**必须处于未绑定状态**（刚恢复出厂，或在官方 App 里解绑过），否则 apiCode 17 返回
-  `error=1 device have bound`；
-- 绑定成功后官方 App（小米运动健康）就用旧 key，**连不上手表了**；要回到官方 App
-  得先在官方 App 里重新配对（手表端会重新绑）。
+⚠️ 前提/后果：
+- **手表必须未绑定**。已绑定的手表收到 apiCode 17 会直接掐断 SPP 连接（固件不接受重绑），
+  所以要先 `miwear reset`（=恢复出厂，手表数据会清空）或在手表设置里恢复出厂；
+- `reset` 需要现有 key（也就是最后一次从官方 App 库读到的）；
+- 绑定成功后官方 App（小米运动健康）用的是旧 key，**连不上手表了**；要回到官方 App 就
+  重新配对（手表端会重新绑）。
 
 配置放 `~/.config/miwear/config`（可选）：
 

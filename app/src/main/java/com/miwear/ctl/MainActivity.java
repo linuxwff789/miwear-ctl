@@ -205,6 +205,7 @@ public class MainActivity extends Activity implements WearLink.Log {
                         byte[] key = hex2(kk);
                         if (key.length != 16) { log("auth key 长度错误: " + key.length + " 字节"); return; }
                         link.authenticate(key);
+                        if (it.getBooleanExtra("unbind_reset", false)) { link.unbindReset(); return; }
                         // 联网网关不 return：可以接着做后面的动作（如拉起手表应用）
                         if (it.getBooleanExtra("netproxy", false)) {
                             link.startNetProxy();

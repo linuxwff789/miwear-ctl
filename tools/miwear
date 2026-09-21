@@ -13,8 +13,11 @@
 #   apps                      列出手表上已安装的快应用
 #   app <包名>                查询某个应用在手表上的状态
 #   key [--save]              从官方 App 数据库读取 auth key（--save 写入配置）
+#   key --set <hex>           手动指定 auth key 并写入配置
 #   bind --probe              查手表是否允许本地绑定（不依赖官方 App）
-#   bind --yes                本地 ECDH 绑定 → 生成全新 auth key 并保存（会覆盖手表上的绑定）
+#   bind --yes                本地 ECDH 绑定 → 生成全新 auth key 并保存（手表需未绑定）
+#   reset --yes               解绑/恢复出厂（清空手表数据）
+#   rebind --yes              一键：解绑 → 等重启 → 本地重绑生成新 key
 #   uninstall <包名> [指纹]   卸载（设备不回执，看手表界面）
 #   launch <包名> [uri]       在手表上启动应用（设备不回执）
 #   notify <标题> <内容> [包]  推一条普通通知到手表（短震动）
@@ -341,7 +344,7 @@ cmd_net() {
 # ──────── auth key（从官方 App 数据库自动读）────────
 save_config() { mkdir -p "$(dirname "$CONF")"; { echo "MAC=$MAC"; echo "KEY=$KEY"; echo "REPO=$REPO"; echo "PORT=$PORT"; } > "$CONF"; }
 
-# 读官方 App 的 device 表；输出: mac \t key \t model \t name（失败/无则输出空或 NONE）
+# 读官方 App 的 device 表；输出: mac \t key \t model \t name \t phone_id（失败/无则输出空或 NONE）
 read_key_from_db() {
   local dbdir=$HOME/.miwear-tmp
   mkdir -p "$dbdir"
@@ -361,11 +364,11 @@ for row in c.execute('select * from device'):
         try: j=json.loads(s)
         except Exception: continue
         k=j.get('encrypt_key')
-        if k: found.append((j.get('mac',''),k,r.get('model',''),(r.get('name') or '').strip()))
+        if k: found.append((j.get('mac',''),k,r.get('model',''),(r.get('name') or '').strip(),j.get('phone_id','')))
 if not found:
     print('NONE'); raise SystemExit
 pick=next((f for f in found if f[0].upper()==want), found[0])
-print('%s\t%s\t%s\t%s' % pick)
+print('%s\t%s\t%s\t%s\t%s' % pick)
 PY
 }
 
@@ -385,7 +388,7 @@ ensure_key() {
     NODB|NONE|"") die "没找到 auth key。手动创建 $CONF（MAC=/KEY=），或跑 miwear key 看看原因" ;;
   esac
   local dmac dkey
-  IFS=$'\t' read -r dmac dkey _ _ <<< "$out"
+  IFS=$'\t' read -r dmac dkey _ _ _ <<< "$out"
   [ -n "${MAC:-}" ] || MAC=$dmac
   KEY=$dkey
   info "已自动获取 auth key（来自小米运动健康数据库）"
@@ -394,6 +397,14 @@ ensure_key() {
 
 cmd_key() {
   need_root
+  case "${1:-}" in
+    --set)
+      local k=${2:-}
+      [ -n "$k" ] || die "用法: miwear key --set <32位hex>"
+      k=$(printf '%s' "$k" | tr -d '[:space:]:-' | tr 'A-F' 'a-f')
+      [ ${#k} -eq 32 ] || die "auth key 必须是 32 位 hex（16 字节），你给的是 ${#k} 位"
+      KEY=$k; save_config; ok "已手动写入 $CONF（KEY=$KEY）"; return 0 ;;
+  esac
   local save=0
   [ "${1:-}" = "--save" ] && save=1
   [ -n "${MAC:-}" ] || MAC=$(detect_mac)
@@ -402,13 +413,22 @@ cmd_key() {
     NODB) die "读不到小米运动健康的 device_db（App 装了吗？）" ;;
     NONE|"") die "数据库里没找到 encrypt_key" ;;
   esac
-  local mac key model name
-  IFS=$'\t' read -r mac key model name <<< "$out"
+  local mac key model name pid
+  IFS=$'\t' read -r mac key model name pid <<< "$out"
   ok "auth key = $key"
-  info "手表：$name ($model)   MAC=$mac"
+  info "手表：$name ($model)   MAC=$mac   phone_id=$pid"
   [ "${mac^^}" = "${MAC^^}" ] || warn "配置里的 MAC ($MAC) 与数据库 ($mac) 不一致"
   if [ $save -eq 1 ]; then MAC=$mac; KEY=$key; save_config; ok "已写入 $CONF"
-  else info "加 --save 可写入 $CONF"; fi
+  else info "加 --save 可写入 $CONF；也可 miwear key --set <hex> 手动指定"; fi
+}
+
+# 从官方数据库里读 phone_id（重绑生成 appDeviceId 要用）
+read_phone_id() {
+  local out; out=$(read_key_from_db)
+  case "$out" in NODB|NONE|"") echo ""; return 0 ;; esac
+  local a b c d pid
+  IFS=$'\t' read -r a b c d pid <<< "$out"
+  echo "$pid"
 }
 
 # ───────── 本地绑定（自造 auth key，不依赖官方 App）─────────
@@ -436,6 +456,7 @@ cmd_bind() {
   fi
 
   local cmd=bind; [ $probe -eq 1 ] && cmd=bindprobe
+  [ -n "$phoneid" ] || phoneid=$(read_phone_id 2>/dev/null)
   # 手表 SPP 通道会被官方 App 占用，先停掉
   su -c "am force-stop com.mi.health" 2>/dev/null
   sleep 1
@@ -467,6 +488,62 @@ cmd_bind() {
   KEY=$k; save_config
   ok "新 auth key = $KEY"
   info "已写入 $CONF —— 以后不再依赖官方 App 的密钥"
+}
+
+# ───────── 解绑（=恢复出厂 ERASE_ALL）/ 一键重绑 ─────────
+#   miwear reset --yes     用现有 key 认证后发 module 2 sub 0（手表清数据/解绑）
+#   miwear rebind --yes    reset + 等手表重启 + 本地 ECDH 重绑 → 新 key
+cmd_reset() {
+  local yes=0
+  [ "${1:-}" = "--yes" ] && yes=1
+  if [ $yes -ne 1 ]; then
+    warn "reset = 解绑/恢复出厂（官方日志里叫 ERASE_ALL），手表上的数据会被清空！"
+    die "确认无误请加 --yes"
+  fi
+  need_root; need_app; ensure_key
+  su -c "am force-stop com.mi.health" 2>/dev/null
+  sleep 1
+  if serve_up; then
+    rpc_send '{"cmd":"reset"}' 30 || warn "reset 无回执（设备本来就不回，正常）"
+  else
+    local run="$$-$RANDOM"
+    su -c "am force-stop $PKG" 2>/dev/null; sleep 1
+    launch_app --es run_id "$run" --ez unbind_reset true
+    if ! wait_for "RUN $run" 25; then warn "App 没起来"; log_dump; return 1; fi
+    sleep 6
+    log_dump | tail -8
+  fi
+  ok "已发送解绑/恢复出厂（手表应会重启/回到未绑定状态）"
+}
+
+cmd_rebind() {
+  local yes=0 uid="" phoneid=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --yes) yes=1; shift ;;
+      --userid) uid=$2; shift 2 ;;
+      --phoneid) phoneid=$2; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [ $yes -ne 1 ]; then
+    warn "rebind = 先解绑（恢复出厂、清空手表）+ 再用本地 ECDH 生成全新 auth key"
+    die "确认无误请加 --yes"
+  fi
+  cmd_reset --yes || return 1
+  info "等手表重启并进入可绑定状态（最多 120s）…"
+  local i out
+  for i in $(seq 1 24); do
+    sleep 5
+    out=$(cmd_bind --probe 2>&1) || true
+    if printf '%s' "$out" | grep -q "支持本地 ECDH 绑定"; then
+      ok "手表已就绪，开始本地重绑…"
+      cmd_bind --yes --userid "$uid" --phoneid "$phoneid" && return 0
+      return 1
+    fi
+    printf '  %s\n' "$(printf '%s' "$out" | tail -1)"
+  done
+  die "手表一直没进入可绑定状态（可能要在手表上确认恢复出厂）"
 }
 
 # ───────── 常驻 CLI 服务 ─────────
@@ -656,6 +733,8 @@ case "${1:-}" in
   app)       shift; cmd_app "$@" ;;
   key)       shift; cmd_key "$@" ;;
   bind)      shift; cmd_bind "$@" ;;
+  reset)     shift; cmd_reset "$@" ;;
+  rebind)    shift; cmd_rebind "$@" ;;
   uninstall) shift; cmd_uninstall "$@" ;;
   launch)    shift; cmd_launch "$@" ;;
   notify)    shift; cmd_notify "$@" ;;

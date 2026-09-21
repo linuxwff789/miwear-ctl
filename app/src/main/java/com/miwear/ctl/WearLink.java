@@ -480,6 +480,19 @@ public class WearLink {
         return ka.generateSecret();
     }
 
+    /**
+     * 解绑 = 手表恢复出厂（ERASE_ALL）。逆向自 DeviceBindManager.unbind：
+     *   oyt{1:2 (module), 2:0 (sub), 4: shr{1:1}}，needResponse=false
+     * 发送后手表会清数据/解绑并可能立刻断开重连。
+     */
+    public void unbindReset() throws Exception {
+        if (keys == null) throw new IllegalStateException("未认证");
+        byte[] shr = new byte[]{0x08, 0x01};          // shr.f1 = 1
+        byte[] body = oyt(2, 0, 4, shr);             // oyt.f4 = shr
+        sendEncrypted(Framing.CH_PB, body);
+        log.log("已发送「解绑/恢复出厂」(module 2 sub 0, ERASE_ALL) —— 设备不回执");
+    }
+
     /** 从 rpk 的 manifest.json 里取字段 */
     private static String parseManifest(byte[] rpk, String key) {
         try {

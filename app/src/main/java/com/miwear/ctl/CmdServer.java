@@ -371,6 +371,10 @@ public class CmdServer implements WearLink.Log {
                     if (link != null) link.stopNetProxy();
                     return null;
                 }
+                case "reset": {
+                    ensureLink().unbindReset();
+                    return null;
+                }
                 case "bindprobe": {
                     closeLink();
                     WearLink l = new WearLink(this);
