@@ -34,6 +34,7 @@ public class MainActivity extends Activity implements WearLink.Log {
     private static final String PREF = "miwear-ui";
 
     private EditText etMac, etKey, etApi, etSub, etTitle, etText, etPkg, etUser, etPhone;
+    private EditText etAppPkg, etFp, etUri;
     private TextView tvLog;
     private WearLink link;
     private final StringBuilder sb = new StringBuilder();
@@ -88,6 +89,25 @@ public class MainActivity extends Activity implements WearLink.Log {
         Button bNotify = new Button(this); bNotify.setText("推送");
         row3.addView(bNotify);
         root.addView(row3);
+
+        // ───────── 快应用（rpk）管理 ─────────
+        root.addView(label("快应用管理：包名 / 指纹(可空) / 启动 URI(可空)"));
+        LinearLayout rowApp = new LinearLayout(this);
+        etAppPkg = input("com.miwear.demo");
+        etFp = input(""); etFp.setHint("指纹 hex");
+        etUri = input(""); etUri.setHint("uri");
+        rowApp.addView(etAppPkg); rowApp.addView(etFp); rowApp.addView(etUri);
+        root.addView(rowApp);
+
+        LinearLayout rowApp2 = new LinearLayout(this);
+        Button bList = new Button(this);  bList.setText("列出应用");
+        Button bQuery = new Button(this); bQuery.setText("查询");
+        Button bUninst = new Button(this); bUninst.setText("卸载");
+        Button bLaunch = new Button(this); bLaunch.setText("启动");
+        Button bInstall = new Button(this); bInstall.setText("安装 rpk");
+        rowApp2.addView(bList); rowApp2.addView(bQuery); rowApp2.addView(bUninst);
+        rowApp2.addView(bLaunch); rowApp2.addView(bInstall);
+        root.addView(rowApp2);
 
         // ───────── 绑定 / 重绑 ─────────
         root.addView(label("绑定 / 重绑（不依赖官方 App）—— userId / phoneId 可留空"));
@@ -162,6 +182,31 @@ public class MainActivity extends Activity implements WearLink.Log {
                 ensureConnected().sendApi(api, sub);
             } catch (Exception e) { log("❌ " + e); }
         }));
+
+        // ── 快应用管理 ──
+        bList.setOnClickListener(v -> bg(() -> {
+            try { ensureConnected().listApps(); } catch (Exception e) { log("❌ " + e); }
+        }));
+        bQuery.setOnClickListener(v -> bg(() -> {
+            try { ensureConnected().appStatus(etAppPkg.getText().toString().trim()); }
+            catch (Exception e) { log("❌ " + e); }
+        }));
+        bUninst.setOnClickListener(v -> confirm("卸载快应用",
+                "卸载 " + etAppPkg.getText().toString().trim() + "？\n（设备对卸载不回执，看手表界面）",
+                () -> {
+                    try {
+                        String fp = etFp.getText().toString().trim();
+                        ensureConnected().uninstall(etAppPkg.getText().toString().trim(),
+                                fp.isEmpty() ? null : hex2(fp));
+                    } catch (Exception e) { log("❌ " + e); }
+                }));
+        bLaunch.setOnClickListener(v -> bg(() -> {
+            try {
+                String u = etUri.getText().toString().trim();
+                ensureConnected().launchApp(etAppPkg.getText().toString().trim(), u.isEmpty() ? null : u);
+            } catch (Exception e) { log("❌ " + e); }
+        }));
+        bInstall.setOnClickListener(v -> pickRpk());
 
         bProbe.setOnClickListener(v -> confirm("查绑定信息",
                 "会连手表并发 apiCode 17。注意：手表若仍绑着官方 App，会直接断开连接（固件拒绝重绑）。",
@@ -274,6 +319,47 @@ public class MainActivity extends Activity implements WearLink.Log {
                 .setPositiveButton("确定", (d, w) -> bg(ok))
                 .setNegativeButton("取消", null)
                 .show());
+    }
+
+    // ───────────────────────── rpk 文件选择 ─────────────────────────
+    private static final int REQ_RPK = 42;
+
+    private void pickRpk() {
+        try {
+            android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(android.content.Intent.CATEGORY_OPENABLE);
+            i.setType("*/*");
+            startActivityForResult(i, REQ_RPK);
+        } catch (Exception e) {
+            log("❌ 打开文件选择器失败: " + e);
+            log("   （或把 rpk 放到 /sdcard 后用 miwear install 装）");
+        }
+    }
+
+    @Override protected void onActivityResult(int req, int res, android.content.Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req != REQ_RPK || res != RESULT_OK || data == null || data.getData() == null) return;
+        final android.net.Uri uri = data.getData();
+        bg(() -> {
+            try {
+                byte[] bytes = readUri(uri);
+                String name = uri.getLastPathSegment();
+                if (name == null || !name.endsWith(".rpk")) name = "app.rpk";
+                log("读取 rpk: " + name + " (" + bytes.length + " 字节)");
+                ensureConnected().installRpk(bytes, name);
+            } catch (Exception e) { log("❌ 安装失败: " + e); }
+        });
+    }
+
+    private byte[] readUri(android.net.Uri uri) throws Exception {
+        java.io.InputStream in = getContentResolver().openInputStream(uri);
+        if (in == null) throw new IllegalStateException("打不开文件: " + uri);
+        java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+        byte[] b = new byte[8192];
+        int n;
+        while ((n = in.read(b)) > 0) bo.write(b, 0, n);
+        in.close();
+        return bo.toByteArray();
     }
 
     /** 确保有一条已连接（已握手）的链路；断了会自动重连 */
