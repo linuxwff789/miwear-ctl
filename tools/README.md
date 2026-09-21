@@ -1,5 +1,8 @@
 # miwear 工具集
 
+> 完整文档（原理 / 协议 / 常见问题）在仓库根目录的 [`../README.md`](../README.md)。
+> 本文件只列 CLI 速查。
+
 ## `miwear` —— 直连手表的一站式命令（Termux + root）
 
 ```bash
@@ -42,7 +45,15 @@ tools/miwear build apk --install          # 云构建 miwear-ctl APK 并安装
 - 首次执行需要认证的命令时自动推导并写入 `~/.config/miwear/config`；
   也可手动 `tools/miwear key --save`
 
-**方式 B（`miwear rebind`，不需要官方 App）**：
+**方式 B（手动指定）**：
+
+```bash
+miwear key --set af994c1833f9329d0e4b083d56547e13
+```
+
+或直接编辑 `~/.config/miwear/config`（`MAC=` / `KEY=`）。App 界面里也有 auth key 输入框。
+
+**方式 C（`miwear rebind`，不需要官方 App）**：
 
 auth key 是**绑定（pairing）时**手机与手表做 ECDH、再 HKDF 出来的 16 字节随机值。
 我们复刻了官方 `com.xiaomi.device.binder.LocalWearBinderV2` 的纯本地流程
@@ -63,6 +74,18 @@ miwear bind --yes          # 真绑：给手表写入一个全新 auth key，并
 - `reset` 需要现有 key（也就是最后一次从官方 App 库读到的）；
 - 绑定成功后官方 App（小米运动健康）用的是旧 key，**连不上手表了**；要回到官方 App 就
   重新配对（手表端会重新绑）。
+
+## App 界面（com.miwear.ctl）
+
+App 主界面把这些能力都做进去了（按钮均有二次确认，不会误触清空手表）：
+
+- **连接参数**：MAC / auth key（持久化到本机）+「读官方 key」（走 `su` 读 `device_db`）
+- **手动发帧**：apiCode / field3 hex → 发送；联网开关
+- **通知**：标题 / 内容 / 包名 → 推送
+- **绑定 / 重绑**：userId / phoneId 输入 + 「查绑定信息」「本地绑定」「解绑(恢复出厂)」「一键重绑」
+- **日志**：滚动查看（与 `miwear log` 同一份）
+
+> 界面上的读 key / 解绑 / 重绑需要 root（`su` 会弹授权）。
 
 配置放 `~/.config/miwear/config`（可选）：
 
