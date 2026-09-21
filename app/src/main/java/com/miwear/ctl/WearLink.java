@@ -61,6 +61,9 @@ public class WearLink {
 
     public WearLink(Log log) { this.log = log; }
 
+    /** 是否已完成 L1 握手（apiCode 之前必须先握手，否则手表会直接断开） */
+    private boolean handshaked = false;
+
     // ───────────────────────── 连接 ─────────────────────────
     public void connect(String mac) throws Exception {
         BluetoothAdapter ad = BluetoothAdapter.getDefaultAdapter();
@@ -78,6 +81,9 @@ public class WearLink {
         reader.setDaemon(true);
         reader.start();
         log.log("✅ 已连接 (SPP/RFCOMM)");
+        // 连上后必须做 L1 握手（CMD_L1START_REQ），否则后续 apiCode 手表不认、直接断开
+        try { handshake(); }
+        catch (Exception e) { log.log("⚠ 握手失败: " + e); }
     }
 
     /** 连接是否仍然有效（供常驻服务判断是否需要重连） */
@@ -205,12 +211,14 @@ public class WearLink {
     // ───────────────────────── 握手 ─────────────────────────
     /** 连接后第一步：CMD 能力协商。返回设备应答。 */
     public byte[] handshake() throws Exception {
+        if (handshaked) return null;                    // 幂等：重复调用不重发
         byte[] payload = Crypto.concat(new byte[]{Framing.CH_PB, Framing.OP_WRITE}, HELLO);
         byte[] f = Framing.build(Framing.TYPE_CMD, cmdSeq++, payload);
         log.log("→ " + Framing.parse(f, f.length, null).get(0));
         write(f);
         Framing.Frame r = await(Framing.TYPE_CMD, 6000);
         if (r == null) { log.log("⚠ 未收到 CMD 应答"); return null; }
+        handshaked = true;
         log.log("握手应答: " + Crypto.hex(r.payload));
         return r.payload;
     }

@@ -130,10 +130,9 @@ public class MainActivity extends Activity implements WearLink.Log {
         }));
         bAuth.setOnClickListener(v -> bg(() -> {
             try {
-                if (link == null) { log("先连接"); return; }
                 byte[] key = hex2(etKey.getText().toString().trim());
                 if (key.length != 16) { log("auth key 必须是 32 位 hex (16 字节)"); return; }
-                link.authenticate(key);
+                ensureConnected().authenticate(key);
                 savePrefs();
             } catch (Exception e) { log("❌ " + e); }
         }));
@@ -144,8 +143,7 @@ public class MainActivity extends Activity implements WearLink.Log {
         }));
         bNotify.setOnClickListener(v -> bg(() -> {
             try {
-                if (link == null) { log("先连接"); return; }
-                link.pushNotification(etPkg.getText().toString().trim(),
+                ensureConnected().pushNotification(etPkg.getText().toString().trim(),
                                       etTitle.getText().toString().trim(),
                                       etText.getText().toString().trim(),
                                       "MiWear", 1);
@@ -153,16 +151,15 @@ public class MainActivity extends Activity implements WearLink.Log {
         }));
         bNet.setOnClickListener(v -> bg(() -> {
             try {
-                if (link == null) { log("先连接"); return; }
-                if (link.netProxyRunning()) link.stopNetProxy(); else link.startNetProxy();
+                WearLink l = ensureConnected();
+                if (l.netProxyRunning()) l.stopNetProxy(); else l.startNetProxy();
             } catch (Exception e) { log("❌ " + e); }
         }));
         bSend.setOnClickListener(v -> bg(() -> {
             try {
-                if (link == null) { log("先连接"); return; }
                 int api = Integer.parseInt(etApi.getText().toString().trim());
                 byte[] sub = hex2(etSub.getText().toString().trim());
-                link.sendApi(api, sub);
+                ensureConnected().sendApi(api, sub);
             } catch (Exception e) { log("❌ " + e); }
         }));
 
@@ -277,6 +274,17 @@ public class MainActivity extends Activity implements WearLink.Log {
                 .setPositiveButton("确定", (d, w) -> bg(ok))
                 .setNegativeButton("取消", null)
                 .show());
+    }
+
+    /** 确保有一条已连接（已握手）的链路；断了会自动重连 */
+    private WearLink ensureConnected() throws Exception {
+        if (link != null && link.isConnected()) return link;
+        String mac = etMac.getText().toString().trim();
+        if (mac.isEmpty()) throw new IllegalStateException("先填手表 MAC");
+        if (link != null) { try { link.close(); } catch (Exception ignored) {} }
+        link = new WearLink(this);
+        link.connect(mac);          // connect() 内部已经做了 L1 握手
+        return link;
     }
 
     /** 新建连接并做 L1 握手（不认证）—— 绑定探测用 */
