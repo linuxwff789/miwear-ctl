@@ -395,7 +395,13 @@ detect_mac() {
 # 没配置时自动推导 auth key（及 MAC）
 ensure_key() {
   [ -n "${MAC:-}" ] || MAC=$(detect_mac)
-  [ -n "${KEY:-}" ] && return 0
+  if [ -n "${KEY:-}" ]; then
+    # 保证 App 也能读到 key（App 进程里常常看不到 su）
+    if ! su -c "test -s /data/data/$PKG/files/official_key.txt" 2>/dev/null; then
+      export_key_to_app "${MAC:-}" "$KEY" ""
+    fi
+    return 0
+  fi
   need_root
   local out; out=$(read_key_from_db)
   case "$out" in

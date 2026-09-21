@@ -196,8 +196,7 @@ public class MainActivity extends Activity implements WearLink.Log {
                                                 etPhone.getText().toString().trim(), bi, 20000);
                         String hex = Crypto.hex(nk);
                         log("🔑 新 auth key = " + hex);
-                        runOnUiThread(() -> etKey.setText(hex));
-                        savePrefs();
+                        runOnUiThread(() -> { etKey.setText(hex); savePrefs(); });
                     } catch (Exception e) { log("❌ " + e); }
                 }));
 
@@ -234,8 +233,7 @@ public class MainActivity extends Activity implements WearLink.Log {
                                                    etPhone.getText().toString().trim(), bi, 20000);
                         String hex = Crypto.hex(nk);
                         log("🔑 重绑成功，新 auth key = " + hex);
-                        runOnUiThread(() -> etKey.setText(hex));
-                        savePrefs();
+                        runOnUiThread(() -> { etKey.setText(hex); savePrefs(); });
                     } catch (Exception e) { log("❌ " + e); }
                 }));
 
@@ -323,8 +321,8 @@ public class MainActivity extends Activity implements WearLink.Log {
                     etKey.setText(key);
                     if (!mac.isEmpty()) etMac.setText(mac);
                     if (!pid.isEmpty()) etPhone.setText(pid);
+                    savePrefs();
                 });
-                savePrefs();
                 return;
             }
             log("⚠ official_key.txt 存在但内容不对，改试其他方式");
@@ -380,8 +378,8 @@ public class MainActivity extends Activity implements WearLink.Log {
             etKey.setText(key);
             if (fmac != null) etMac.setText(fmac);
             if (fpid != null) etPhone.setText(fpid);
+            savePrefs();
         });
-        savePrefs();
         return true;
     }
 
