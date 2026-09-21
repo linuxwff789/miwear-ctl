@@ -174,7 +174,7 @@ miwear build rpk [--install]   # 云构建 quickapp（rpk）
 | 区域 | 控件 | 说明 |
 |---|---|---|
 | 连接参数 | 手表 MAC / auth key | 会持久化到本机 `SharedPreferences`（重启不丢） |
-| | **读官方 key** | 通过 `su` 把 `com.mi.health` 的 `device_db` 拷出来，正则抓 `encrypt_key`/`mac`/`phone_id` |
+| | **读官方 key** | 优先读 Termux 侧导出的 `<files>/official_key.txt`（或 `device_db.official`）；读不到再尝试自己 `su` |
 | | 保存配置 | 把 MAC/KEY/userId/phoneId 存到本机 |
 | | 连接 / 认证 / 断开 | 基本连接 |
 | 手动发帧 | apiCode / field3 hex / 发送 / 联网 | 调试用（发送任意 apiCode） |
@@ -188,6 +188,13 @@ miwear build rpk [--install]   # 云构建 quickapp（rpk）
 
 界面上的「读官方 key / 解绑 / 重绑」需要 root（`su` 会弹一次授权）。按钮做了二次确认，
 不会误触清空手表。
+
+> ⚠️ **为什么「读官方 key」要先在 Termux 里跑一次 `miwear key`**：
+> 很多 root 方案（如 KernelSU-Next）只在部分 mount namespace 里暴露 `su`，App 进程里
+> `/system/bin/su` 根本不存在（`exec` 直接 `ENOENT`），所以 App 自己没法读
+> `/data/data/com.mi.health`。因此 CLI 每次读 key 时都会顺手把结果导出到
+> `/data/data/com.miwear.ctl/files/official_key.txt`（还有原件 `device_db.official`，chmod 666），
+> App 直接读它即可。若你的设备 App 里能看到 `su`，则 App 也能自己拷。
 
 ---
 
@@ -375,6 +382,12 @@ gradle assembleRelease        # 产物 app/build/outputs/apk/release/app-release
 
 **Q：手表 SPP 连不上？**
 先 `am force-stop com.mi.health`（CLI 已自动做），或设 `MIWEAR_BTRESET=1` 重启蓝牙清残留连接。
+
+**Q：App 里点「读官方 key」提示读不到 / `su: No such file or directory`？**
+很多 root 方案（KernelSU-Next 等）只在部分 mount namespace 里暴露 `su`，App 进程里
+`/system/bin/su` 不存在，`Runtime.exec("su")` 会 `ENOENT`。解决办法：先在 Termux 里跑一次
+`miwear key`（会自动把 key 导出到 App 的 files 目录），再回 App 点一次；或者直接把 32 位 hex
+粘进 auth key 输入框。
 
 **已知限制**
 

@@ -350,6 +350,11 @@ read_key_from_db() {
   mkdir -p "$dbdir"
   su -c "rm -f $dbdir/device_db*; cp /data/data/com.mi.health/databases/device_db* $dbdir/ 2>/dev/null; chmod 666 $dbdir/device_db* 2>/dev/null"
   [ -f "$dbdir/device_db" ] || { echo NODB; return 0; }
+  # 顺手把原件导给 App —— App 进程里往往看不到 su（mount namespace 里没 su），
+  # 没法自己读官方库，只能读我们放进去的文件。
+  if su -c "test -d /data/data/$PKG/files" 2>/dev/null; then
+    su -c "cp -f $dbdir/device_db /data/data/$PKG/files/device_db.official 2>/dev/null; chmod 666 /data/data/$PKG/files/device_db.official 2>/dev/null"
+  fi
   MIWEAR_MAC="${MAC:-}" python3 - "$dbdir/device_db" <<'PY'
 import sqlite3,json,sys,os
 p=sys.argv[1]; want=os.environ.get('MIWEAR_MAC','').upper()
@@ -372,6 +377,15 @@ print('%s\t%s\t%s\t%s\t%s' % pick)
 PY
 }
 
+# 把官方 key 导出给 App（写 3 行：mac / key / phone_id）
+export_key_to_app() {  # mac key phone_id
+  local appdir=/data/data/$PKG/files
+  su -c "test -d $appdir" 2>/dev/null || return 0
+  local tmp=$HOME/.miwear-tmp/official_key.txt
+  { echo "${1:-}"; echo "${2:-}"; echo "${3:-}"; } > "$tmp"
+  su -c "cp -f $tmp $appdir/official_key.txt && chmod 666 $appdir/official_key.txt" 2>/dev/null
+}
+
 # 从已配对设备里猜手表 MAC
 detect_mac() {
   su -c "dumpsys bluetooth_manager" 2>/dev/null | sed -n '/Bonded devices/,/AdapterState/p' \
@@ -387,10 +401,11 @@ ensure_key() {
   case "$out" in
     NODB|NONE|"") die "没找到 auth key。手动创建 $CONF（MAC=/KEY=），或跑 miwear key 看看原因" ;;
   esac
-  local dmac dkey
-  IFS=$'\t' read -r dmac dkey _ _ _ <<< "$out"
+  local dmac dkey dmodel dname dpid
+  IFS=$'\t' read -r dmac dkey dmodel dname dpid <<< "$out"
   [ -n "${MAC:-}" ] || MAC=$dmac
   KEY=$dkey
+  export_key_to_app "$dmac" "$dkey" "$dpid"
   info "已自动获取 auth key（来自小米运动健康数据库）"
   save_config
 }
@@ -403,7 +418,8 @@ cmd_key() {
       [ -n "$k" ] || die "用法: miwear key --set <32位hex>"
       k=$(printf '%s' "$k" | tr -d '[:space:]:-' | tr 'A-F' 'a-f')
       [ ${#k} -eq 32 ] || die "auth key 必须是 32 位 hex（16 字节），你给的是 ${#k} 位"
-      KEY=$k; save_config; ok "已手动写入 $CONF（KEY=$KEY）"; return 0 ;;
+      KEY=$k; save_config; export_key_to_app "${MAC:-}" "$KEY" ""
+      ok "已手动写入 $CONF（KEY=$KEY）"; return 0 ;;
   esac
   local save=0
   [ "${1:-}" = "--save" ] && save=1
@@ -415,6 +431,7 @@ cmd_key() {
   esac
   local mac key model name pid
   IFS=$'\t' read -r mac key model name pid <<< "$out"
+  export_key_to_app "$mac" "$key" "$pid"
   ok "auth key = $key"
   info "手表：$name ($model)   MAC=$mac   phone_id=$pid"
   [ "${mac^^}" = "${MAC^^}" ] || warn "配置里的 MAC ($MAC) 与数据库 ($mac) 不一致"

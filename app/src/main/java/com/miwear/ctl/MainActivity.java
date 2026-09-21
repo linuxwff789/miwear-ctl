@@ -299,52 +299,101 @@ public class MainActivity extends Activity implements WearLink.Log {
         return l;
     }
 
-    /** 从官方 App（com.mi.health）的 device_db 里抓 encrypt_key / mac / phone_id（需要 root） */
+    /** 从官方 App（com.mi.health）读 encrypt_key / mac / phone_id。
+     *
+     * 注意：很多设备（比如 KernelSU-Next）只在部分 mount namespace 里暴露 su，
+     * App 进程里 /system/bin/su 可能根本不存在（exec 会 ENOENT），所以优先读
+     * Termux 侧（miwear）导出的文件：
+     *   <files>/official_key.txt   第 1 行 mac、第 2 行 key、第 3 行 phone_id
+     *   <files>/device_db.official 官方 device_db 原件（正则兜底）
+     */
     private void readOfficialKey() throws Exception {
-        String dir = getFilesDir().getAbsolutePath();
-        int rc = runSu("cp -f /data/data/com.mi.health/databases/device_db* " + dir + "/ && chmod 666 " + dir + "/device_db*");
-        File db = new File(dir, "device_db");
-        if (rc != 0 || !db.exists()) {
-            log("❌ 读不到官方 App 的 device_db（需要 root，且装了小米运动健康）");
-            return;
+        // ① Termux 侧导出的 key
+        File kf = new File(getFilesDir(), "official_key.txt");
+        if (kf.exists()) {
+            String[] lines = readLines(kf);
+            if (lines.length >= 2 && lines[1].trim().matches("[0-9a-fA-F]{32}")) {
+                final String mac = lines[0].trim();
+                final String key = lines[1].trim().toLowerCase();
+                final String pid = lines.length > 2 ? lines[2].trim() : "";
+                log("🔑 读到官方 key（Termux 导出）= " + key);
+                if (!mac.isEmpty()) log("   MAC = " + mac);
+                if (!pid.isEmpty()) log("   phone_id = " + pid);
+                runOnUiThread(() -> {
+                    etKey.setText(key);
+                    if (!mac.isEmpty()) etMac.setText(mac);
+                    if (!pid.isEmpty()) etPhone.setText(pid);
+                });
+                savePrefs();
+                return;
+            }
+            log("⚠ official_key.txt 存在但内容不对，改试其他方式");
         }
+
+        // ② 直接解析导出的 device_db 原件
+        File db = new File(getFilesDir(), "device_db.official");
+        if (!db.exists()) db = new File(getFilesDir(), "device_db");
+        if (db.exists()) {
+            if (parseDbForKey(db)) return;
+        }
+
+        // ③ 自己 su 去拷（部分设备 App 里能看到 su）
+        String dir = getFilesDir().getAbsolutePath();
+        String cmd = "cp -f /data/data/com.mi.health/databases/device_db* " + dir + "/ && chmod 666 " + dir + "/device_db*";
+        String err = null;
+        for (String su : new String[]{"su", "/system/bin/su", "/system/xbin/su", "/sbin/su",
+                                      "/data/adb/ksu/bin/su", "/data/adb/magisk/su"}) {
+            try {
+                Process p = Runtime.getRuntime().exec(new String[]{su, "-c", cmd});
+                int rc = p.waitFor();
+                if (rc == 0) {
+                    File f = new File(dir, "device_db");
+                    if (f.exists() && parseDbForKey(f)) return;
+                }
+                err = su + " exit=" + rc;
+            } catch (Exception e) {
+                err = su + ": " + e.getMessage();
+            }
+        }
+        log("❌ 读不到官方 App 的 device_db（" + err + "）");
+        log("   → 先在 Termux 里跑：miwear key   （会自动把 key 导出到本 App）");
+        log("   → 或直接把 32 位 hex 填进上面的 auth key 框");
+    }
+
+    /** 从 sqlite 文件里正则抓 encrypt_key / mac / phone_id（JSON 是明文存的） */
+    private boolean parseDbForKey(File db) throws Exception {
         byte[] b = new byte[(int) db.length()];
         try (FileInputStream in = new FileInputStream(db)) { in.read(b); }
-        String s = new String(b, "ISO-8859-1");      // JSON 是明文存在 sqlite blob 里的，直接正则即可
-
+        String s = new String(b, "ISO-8859-1");
         Matcher mk = Pattern.compile("\"encrypt_key\"\\s*:\\s*\"([0-9a-fA-F]{32})\"").matcher(s);
-        if (!mk.find()) { log("❌ 数据库里没找到 encrypt_key"); return; }
+        if (!mk.find()) { log("⚠ " + db.getName() + " 里没找到 encrypt_key"); return false; }
         String key = mk.group(1).toLowerCase();
         int from = Math.max(0, mk.start() - 200);
         String ctx = s.substring(from, Math.min(s.length(), mk.end() + 500));
         String mac = firstMatch(ctx, "\"mac\"\\s*:\\s*\"([0-9A-Fa-f:]{17})\"");
         String pid = firstMatch(ctx, "\"phone_id\"\\s*:\\s*\"([^\"]+)\"");
-
         log("🔑 官方 App 里的 key = " + key);
         if (mac != null) log("   MAC = " + mac);
         if (pid != null) log("   phone_id = " + pid);
         final String fmac = mac, fpid = pid;
         runOnUiThread(() -> {
             etKey.setText(key);
-            if (fmac != null && etMac.getText().toString().trim().isEmpty()) etMac.setText(fmac);
-            if (fpid != null && etPhone.getText().toString().trim().isEmpty()) etPhone.setText(fpid);
+            if (fmac != null) etMac.setText(fmac);
+            if (fpid != null) etPhone.setText(fpid);
         });
         savePrefs();
+        return true;
+    }
+
+    private static String[] readLines(File f) throws Exception {
+        byte[] b = new byte[(int) f.length()];
+        try (FileInputStream in = new FileInputStream(f)) { in.read(b); }
+        return new String(b, "UTF-8").split("\\r?\\n");
     }
 
     private static String firstMatch(String s, String re) {
         Matcher m = Pattern.compile(re).matcher(s);
         return m.find() ? m.group(1) : null;
-    }
-
-    private int runSu(String cmd) {
-        try {
-            Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
-            return p.waitFor();
-        } catch (Exception e) {
-            log("su 执行失败: " + e);
-            return -1;
-        }
     }
 
     // ───────────────────────── 配置持久化 ─────────────────────────
