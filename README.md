@@ -35,7 +35,9 @@
 | 模拟来电（长震动/来电界面） | `7/0` + `f8/f16` | `call` | — | ✅ |
 | 列表/查询/安装/卸载/启动应用 | `20/0,21,1,3,4`、`21/3`、`22/0` | `apps` `app` `install` `uninstall` `launch` | — | ✅ |
 | rpk 传输 | `22/0` + MASS ch2 | `install` | — | ✅ |
-| 手表状态（电量） | `8/29` | `info` | — | ✅ |
+| 手表状态（电量/充电） | `2/1` | `battery` `info` | 电量/设备信息 | ✅ |
+| 设备信息（固件/型号/SN） | `2/2` | `info` | 电量+设备信息 | ✅ |
+| 读任意信息/设置接口 | 任意 module/sub | `probe <mod> <sub>` | 读信息 / 存储 / 心率 / 血氧 / 压力 / 久坐 / 睡眠 / 息屏 | ✅ |
 | 找手表（震动/响铃） | `2/18` | `find` | — | ✅ |
 | 同步手机 App 安装状态 | `20/7` | `sync` | — | ✅ |
 | 手机状态回传（锁屏/亮屏） | `23/0→23/1` | 自动应答 | — | ✅ |
@@ -129,7 +131,9 @@ miwear rpc '<json>'           # 直接向服务发一条 JSON 命令（调试/�
 ```bash
 miwear notify "标题" "内容" [包名]     # 普通通知（短震动）
 miwear call 10086 中国移动 [1|2|3]     # 来电/去电/未接（长震动、来电界面）
-miwear info                           # 电量等（module 8/29）
+miwear info                           # 电量 + 充电 + 固件/型号/SN
+miwear battery                        # 只读电量/充电（module 2/1）
+miwear probe <module> <sub>           # 读任意官方信息接口，输出 protobuf 树
 miwear find                           # 让手表震动/响铃（module 2/18）
 miwear apps                           # 列出手表已安装快应用（含指纹）
 miwear app <包名>                     # 查某个快应用状态
@@ -185,6 +189,9 @@ miwear build rpk [--install]   # 云构建 quickapp（rpk）
 | | **卸载** | 二次确认；设备不回执，看手表界面 |
 | | **启动** | 在手表上启动快应用（可带 URI） |
 | | **安装 rpk** | 弹系统文件选择器选 `.rpk` → 传输安装 |
+| **设备信息 / 健康** | module / sub 输入 + **读信息** | 读任意官方信息接口，输出 protobuf 树 |
+| | **电量+设备信息** | module 2/1 + 2/2（电量、充电、固件、型号、SN） |
+| | 存储 / 心率设置 / 血氧设置 / 压力设置 / 久坐提醒 / 睡眠模式 / 息屏显示 | 一键读对应官方接口（2/62、8/10、8/8、8/14、8/12、17/8、2/65） |
 | **绑定 / 重绑** | userId / phoneId（可留空） | 重绑时生成 `appDeviceId` 用；留空则用默认 |
 | | **查绑定信息** | 连手表发 apiCode 17；手表仍绑着官方 App 时会直接断开（固件拒绝重绑） |
 | | **本地绑定** | 本地 ECDH 生成全新 auth key，成功后自动填回 KEY 并保存 |
@@ -385,6 +392,18 @@ gradle assembleRelease        # 产物 app/build/outputs/apk/release/app-release
 
 **Q：`bind --probe` 直接把连接弄断了？**
 正常。已绑定的手表收到 apiCode 17 会掐断 SPP（固件拒绝重绑）。先 `miwear reset --yes` 解绑。
+
+**Q：`info` 读到的电量和手表上显示的不一样？**
+已经修了。之前用的 `module 8/29` 里那个字段**根本不是电量**（而且它是 sint32/zigzag）。
+官方 `DeviceBasicStatusDataHandler.syncBattery` 用的是 **`module 2 sub 1`**：
+`oyt.f4=shr → shr.f2=qgr → qgr.f1=a → a.f1=电量, a.f2=充电状态, a.f3={state,timestamp}`。
+现在 `miwear info` / `miwear battery` 都走这个。
+
+**Q：健康数据（步数/心率/睡眠）能直接读吗？**
+手表把健康数据当作“数据包”同步：`module 8 sub 1`（今日 id）/`sub 2`（历史 id）先拿一批 data id，
+再 `sub 3/4` 拉数据，最后 `sub 5` 确认；数据本体是 schema 驱动的二进制（官方有一套 fitness-schema-parser）。
+目前 `miwear probe 8 1` 能看到 data id；完整解析还没做。
+**健康“设置类”是可直接读的**：心率 `8/10`、血氧 `8/8`、压力 `8/14`、久坐 `8/12`、睡眠模式 `17/8`。
 
 **Q：手表 SPP 连不上？**
 先 `am force-stop com.mi.health`（CLI 已自动做），或设 `MIWEAR_BTRESET=1` 重启蓝牙清残留连接。

@@ -34,7 +34,7 @@ public class MainActivity extends Activity implements WearLink.Log {
     private static final String PREF = "miwear-ui";
 
     private EditText etMac, etKey, etApi, etSub, etTitle, etText, etPkg, etUser, etPhone;
-    private EditText etAppPkg, etFp, etUri;
+    private EditText etAppPkg, etFp, etUri, etMod, etInfoSub;
     private TextView tvLog;
     private WearLink link;
     private final StringBuilder sb = new StringBuilder();
@@ -89,6 +89,30 @@ public class MainActivity extends Activity implements WearLink.Log {
         Button bNotify = new Button(this); bNotify.setText("推送");
         row3.addView(bNotify);
         root.addView(row3);
+
+        // ───────── 设备信息 / 健康 ─────────
+        root.addView(label("设备信息 / 健康（module / sub，用官方读接口）"));
+        LinearLayout rowInfo = new LinearLayout(this);
+        etMod = input("2"); etMod.setHint("module");
+        etInfoSub = input("1"); etInfoSub.setHint("sub");
+        rowInfo.addView(etMod); rowInfo.addView(etInfoSub);
+        Button bProbeInfo = new Button(this); bProbeInfo.setText("读信息");
+        rowInfo.addView(bProbeInfo);
+        Button bInfoAll = new Button(this); bInfoAll.setText("电量+设备信息");
+        rowInfo.addView(bInfoAll);
+        root.addView(rowInfo);
+
+        LinearLayout rowInfo2 = new LinearLayout(this);
+        Button bStor = new Button(this); bStor.setText("存储");
+        Button bHr = new Button(this); bHr.setText("心率设置");
+        Button bSpo2 = new Button(this); bSpo2.setText("血氧设置");
+        Button bPress = new Button(this); bPress.setText("压力设置");
+        Button bSit = new Button(this); bSit.setText("久坐提醒");
+        Button bSleep = new Button(this); bSleep.setText("睡眠模式");
+        Button bAod = new Button(this); bAod.setText("息屏显示");
+        rowInfo2.addView(bStor); rowInfo2.addView(bHr); rowInfo2.addView(bSpo2);
+        rowInfo2.addView(bPress); rowInfo2.addView(bSit); rowInfo2.addView(bSleep); rowInfo2.addView(bAod);
+        root.addView(rowInfo2);
 
         // ───────── 快应用（rpk）管理 ─────────
         root.addView(label("快应用管理：包名 / 指纹(可空) / 启动 URI(可空)"));
@@ -207,6 +231,19 @@ public class MainActivity extends Activity implements WearLink.Log {
             } catch (Exception e) { log("❌ " + e); }
         }));
         bInstall.setOnClickListener(v -> pickRpk());
+
+        // ── 设备信息 / 健康 ──
+        bProbeInfo.setOnClickListener(v -> probe(etMod.getText().toString().trim(), etInfoSub.getText().toString().trim()));
+        bInfoAll.setOnClickListener(v -> bg(() -> {
+            try { ensureConnected().deviceInfoAll(); } catch (Exception e) { log("❌ " + e); }
+        }));
+        bStor.setOnClickListener(v -> probe("2", "62"));
+        bHr.setOnClickListener(v -> probe("8", "10"));
+        bSpo2.setOnClickListener(v -> probe("8", "8"));
+        bPress.setOnClickListener(v -> probe("8", "14"));
+        bSit.setOnClickListener(v -> probe("8", "12"));
+        bSleep.setOnClickListener(v -> probe("17", "8"));
+        bAod.setOnClickListener(v -> probe("2", "65"));
 
         bProbe.setOnClickListener(v -> confirm("查绑定信息",
                 "会连手表并发 apiCode 17。注意：手表若仍绑着官方 App，会直接断开连接（固件拒绝重绑）。",
@@ -360,6 +397,17 @@ public class MainActivity extends Activity implements WearLink.Log {
         while ((n = in.read(b)) > 0) bo.write(b, 0, n);
         in.close();
         return bo.toByteArray();
+    }
+
+    /** 读任意 module/sub（官方读接口），结果以 protobuf 树打到日志 */
+    private void probe(String mod, String sub) {
+        bg(() -> {
+            try {
+                int m = Integer.parseInt(mod.trim());
+                int s = Integer.parseInt(sub.trim());
+                ensureConnected().probeInfo(m, s, 8000);
+            } catch (Exception e) { log("❌ " + e); }
+        });
     }
 
     /** 确保有一条已连接（已握手）的链路；断了会自动重连 */
@@ -620,7 +668,12 @@ public class MainActivity extends Activity implements WearLink.Log {
                         }
                         String ap = it.getStringExtra("app_pkg");
                         if (ap != null) { link.appStatus(ap); return; }
-                        if (it.getBooleanExtra("query_status", false)) { link.deviceStatus(); return; }
+                        if (it.getBooleanExtra("battery_only", false)) { link.batteryInfo(); return; }
+                        if (it.hasExtra("probe_mod")) {
+                            link.probeInfo(it.getIntExtra("probe_mod", 0), it.getIntExtra("probe_sub", 0), 8000);
+                            return;
+                        }
+                        if (it.getBooleanExtra("query_status", false)) { link.deviceInfoAll(); return; }
                         if (it.getBooleanExtra("find_device", false)) { link.findDevice(); return; }
                         String mp = it.getStringExtra("msg_pkg");
                         if (mp != null) {

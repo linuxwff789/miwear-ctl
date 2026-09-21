@@ -67,6 +67,10 @@ def extras_to_json(args):
         m = {"cmd": "apps"}
     elif g("query_status") == "true":
         m = {"cmd": "info"}
+    elif g("battery_only") == "true":
+        m = {"cmd": "battery"}
+    elif "probe_mod" in kv:
+        m = {"cmd": "probe", "mod": n("probe_mod"), "sub": n("probe_sub")}
     elif g("find_device") == "true":
         m = {"cmd": "find"}
     elif "app_pkg" in kv:

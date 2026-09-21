@@ -151,11 +151,8 @@ public class WearLink {
                                 sendPhoneStatus();
                                 continue;
                             }
-                            if (mod == 2 && sub == 2) {          // 设备信息心跳
-                                continue;
-                            }
                             log.log("← ch1 明文 " + Crypto.hex(pt));
-                            synchronized (queue) { queue.add(f); queue.notifyAll(); }
+                            synchronized (queue) { if (queue.size() > 500) queue.poll(); queue.add(f); queue.notifyAll(); }
                         }
                         continue;
                     }
@@ -922,6 +919,119 @@ public class WearLink {
             }
         }
         return false;
+    }
+
+    // ───────── 设备信息 / 电量 / 通用读取 ─────────
+
+    /**
+     * module 2 sub 1：电量 + 充电状态。
+     * 官方 DeviceBasicStatusDataHandler.syncBattery → oyt{1:2, 2:1}
+     * 应答 oyt.f4=shr → shr.f2=qgr → qgr.f1=a → a.f1=电量, a.f2=充电状态, a.f3={f1=state,f2=时间戳}
+     * （注：module 8/29 的字段不是电量，别再用它读电量）
+     */
+    public int[] batteryInfo() throws Exception {
+        byte[] pt = request(oyt(2, 1, 0, null), 8000);
+        if (pt == null) { log.log("电量: (无应答)"); return null; }
+        log.log("电量明文: " + Crypto.hex(pt));
+        int battery = -1, chargeStatus = -1, state = -1;
+        long ts = 0;
+        for (PB.F f4 : PB.parse(pt)) {
+            if (f4.field != 4 || f4.bytes == null) continue;
+            for (PB.F f2 : PB.parse(f4.bytes)) {
+                if (f2.field != 2 || f2.bytes == null) continue;
+                for (PB.F f1 : PB.parse(f2.bytes)) {
+                    if (f1.field != 1 || f1.bytes == null) continue;
+                    for (PB.F a : PB.parse(f1.bytes)) {
+                        if (a.field == 1) battery = (int) a.varint;
+                        else if (a.field == 2) chargeStatus = (int) a.varint;
+                        else if (a.field == 3 && a.bytes != null)
+                            for (PB.F c : PB.parse(a.bytes)) {
+                                if (c.field == 1) state = (int) c.varint;
+                                else if (c.field == 2) ts = c.varint;
+                            }
+                    }
+                }
+            }
+        }
+        log.log("  🔋 电量 = " + battery + "%");
+        String cs = chargeStatus == 1 ? "充电中" : chargeStatus == 0 ? "未充电" : ("未知(" + chargeStatus + ")");
+        log.log("  ⚡ 充电 = " + cs + (state == 3 ? "，已充满" : ""));
+        if (ts > 0) log.log("  最近充电时间 = " + new java.util.Date(ts * 1000));
+        return new int[]{battery, chargeStatus, state};
+    }
+
+    /** module 2 sub 2：设备信息（官方 BluetoothDeviceModel.readWatchInfo）。 */
+    public String watchInfo() throws Exception {
+        byte[] pt = request(oyt(2, 2, 0, null), 8000);
+        if (pt == null) { log.log("设备信息: (无应答)"); return null; }
+        log.log("设备信息明文: " + Crypto.hex(pt));
+        // oyt.f4=shr → shr.f3=mgr{f1=SN, f2=固件, f4=型号, f5=产品, f6=渠道}
+        StringBuilder all = new StringBuilder();
+        for (PB.F f4 : PB.parse(pt)) {
+            if (f4.field != 4 || f4.bytes == null) continue;
+            for (PB.F f3 : PB.parse(f4.bytes)) {
+                if (f3.field != 3 || f3.bytes == null) continue;
+                for (PB.F g : PB.parse(f3.bytes)) {
+                    String v = g.wire == 2 ? safeStr(g.bytes) : String.valueOf(g.varint);
+                    String name = g.field == 1 ? "SN" : g.field == 2 ? "固件版本" : g.field == 3 ? "f3"
+                                : g.field == 4 ? "型号" : g.field == 5 ? "产品" : g.field == 6 ? "版本渠道" : ("f" + g.field);
+                    log.log("  " + name + " = " + v);
+                    all.append(name).append('=').append(v).append(' ');
+                }
+            }
+        }
+        return all.toString().trim();
+    }
+
+    /** 通用：发 oyt{1:mod,2:sub}（无 payload）并把应答打成 protobuf 树。 */
+    public String probeInfo(int mod, int sub, long timeoutMs) throws Exception {
+        byte[] pt = request(oyt(mod, sub, 0, null), timeoutMs);
+        if (pt == null) { log.log("module " + mod + " sub " + sub + ": (无应答)"); return null; }
+        String t = tree(pt, 1);
+        log.log("module " + mod + " sub " + sub + " 应答:\n" + t);
+        return t;
+    }
+
+    /** 一次读完：电量 + 设备信息 */
+    public void deviceInfoAll() throws Exception {
+        try { batteryInfo(); } catch (Exception e) { log.log("电量读取失败: " + e); }
+        try { watchInfo(); } catch (Exception e) { log.log("设备信息读取失败: " + e); }
+    }
+
+    private static String safeStr(byte[] b) {
+        if (b == null) return "";
+        for (byte x : b) { int c = x & 0xFF; if (c < 0x20 && c != 9 && c != 10 && c != 13) return Crypto.hex(b); }
+        try { return new String(b, "UTF-8"); } catch (Exception e) { return Crypto.hex(b); }
+    }
+
+    /** protobuf 树状打印（能识别嵌套消息 / 字符串 / float） */
+    public static String tree(byte[] b, int depth) {
+        StringBuilder sb = new StringBuilder();
+        String pad = "  ".repeat(Math.max(0, depth));
+        List<PB.F> fs = PB.tryParse(b);
+        if (fs == null) return pad + "(非 protobuf) " + Crypto.hex(b) + "\n";
+        for (PB.F f : fs) {
+            if (f.wire == 0) {
+                sb.append(pad).append("f").append(f.field).append(" = ").append(f.varint).append("\n");
+            } else if (f.wire == 5) {
+                sb.append(pad).append("f").append(f.field).append(" = ").append(f.fixed32)
+                  .append(" (float ").append(Float.intBitsToFloat(f.fixed32)).append(")\n");
+            } else if (f.wire == 1) {
+                sb.append(pad).append("f").append(f.field).append(" = ").append(f.fixed64).append(" (fixed64)\n");
+            } else {
+                List<PB.F> sub2 = PB.tryParse(f.bytes);
+                if (sub2 != null && f.bytes.length > 0) {
+                    sb.append(pad).append("f").append(f.field).append(" {").append(f.bytes.length).append("B}\n");
+                    sb.append(tree(f.bytes, depth + 1));
+                } else {
+                    String s = safeStr(f.bytes);
+                    boolean printable = !s.equals(Crypto.hex(f.bytes));
+                    sb.append(pad).append("f").append(f.field).append(" = ")
+                      .append(printable ? ("\"" + s + "\"") : Crypto.hex(f.bytes)).append("\n");
+                }
+            }
+        }
+        return sb.toString();
     }
 
     /** module 2 sub 78：查询设备状态（旧接口，手表未必支持） */

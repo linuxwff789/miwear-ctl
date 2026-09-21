@@ -22,7 +22,10 @@
 #   launch <包名> [uri]       在手表上启动应用（设备不回执）
 #   notify <标题> <内容> [包]  推一条普通通知到手表（短震动）
 #   call <号码> [姓名] [类型]   模拟来电（长震动/响铃）
-#   info                      查询设备状态（电量等，module 2 sub 78）
+#   info                      设备状态（电量 + 固件/型号/SN）
+#   battery                   只读电量/充电状态（module 2 sub 1）
+#   probe <module> <sub>      读任意官方信息接口，输出 protobuf 树
+#                             （如 2/62 存储、8/10 心率、8/8 血氧、8/14 压力、8/12 久坐、17/8 睡眠模式）
 #   find                      找手表：让手表震动/响铃
 #   msg <包名> <文本>          给手表快应用发消息（interconnect）
 #   sync <包名> [状态]         同步手机 App 安装状态
@@ -262,7 +265,19 @@ cmd_call() {
 }
 
 # 设备状态（module 8 sub 29，含电量）
-cmd_info() { do_action "电量" 40 --ez query_status true; }
+cmd_info() { do_action "电量|固件版本" 40 --ez query_status true; }
+
+# 电量/充电（官方 module 2 sub 1）
+cmd_battery() { do_action "电量" 40 --ez battery_only true; }
+
+# 读任意 module/sub（官方读接口），输出 protobuf 树
+cmd_probe() {
+  local m=${1:-} s=${2:-}
+  [ -n "$m" ] && [ -n "$s" ] || die "用法: miwear probe <module> <sub>"
+  need_root; need_app; ensure_key
+  if serve_up; then rpc_send "$(okjson cmd=probe mod="$m" sub="$s")" 30 && return 0; fi
+  do_action "module $m sub $s" 40 --ei probe_mod "$m" --ei probe_sub "$s"
+}
 
 # 找手表：让手表震动/响铃（module 2 sub 18）
 cmd_find() {
@@ -763,6 +778,8 @@ case "${1:-}" in
   notify)    shift; cmd_notify "$@" ;;
   call)      shift; cmd_call "$@" ;;
   info)      shift; cmd_info "$@" ;;
+  battery)   shift; cmd_battery "$@" ;;
+  probe)     shift; cmd_probe "$@" ;;
   find)      shift; cmd_find "$@" ;;
   msg)       shift; cmd_msg "$@" ;;
   sync)      shift; cmd_sync "$@" ;;

@@ -12,6 +12,8 @@ public final class PB {
         public int field, wire;
         public long varint;
         public byte[] bytes;
+        public int fixed32;
+        public long fixed64;
     }
 
     public static List<F> parse(byte[] b) {
@@ -29,10 +31,59 @@ public final class PB {
             } else if (f.wire == 2) {
                 long ln = 0; sh = 0;
                 while (i < b.length) { int x = b[i++] & 0xFF; ln |= (long) (x & 0x7F) << sh; sh += 7; if ((x & 0x80) == 0) break; }
+                if (ln < 0 || i + (int) ln > b.length) break;
                 f.bytes = new byte[(int) ln];
                 System.arraycopy(b, i, f.bytes, 0, (int) ln);
                 i += (int) ln;
+            } else if (f.wire == 5) {
+                if (i + 4 > b.length) break;
+                f.fixed32 = (b[i] & 0xFF) | ((b[i+1] & 0xFF) << 8) | ((b[i+2] & 0xFF) << 16) | ((b[i+3] & 0xFF) << 24);
+                i += 4;
+            } else if (f.wire == 1) {
+                if (i + 8 > b.length) break;
+                long v = 0;
+                for (int k = 7; k >= 0; k--) v = (v << 8) | (b[i + k] & 0xFFL);
+                f.fixed64 = v; i += 8;
             } else break;
+            out.add(f);
+        }
+        return out;
+    }
+
+    /** 严格解析：整个 buffer 必须刚好消费完且字段合法；否则返回 null（用来判断一段 bytes 是不是 protobuf）*/
+    public static List<F> tryParse(byte[] b) {
+        if (b == null || b.length == 0) return null;
+        int i = 0;
+        List<F> out = new ArrayList<>();
+        while (i < b.length) {
+            long key = 0; int sh = 0; boolean ok = false;
+            while (i < b.length) { int x = b[i++] & 0xFF; key |= (long) (x & 0x7F) << sh; sh += 7; if ((x & 0x80) == 0) { ok = true; break; } }
+            if (!ok) return null;
+            int field = (int) (key >> 3), wire = (int) (key & 7);
+            if (field <= 0 || field > 20000) return null;
+            F f = new F(); f.field = field; f.wire = wire;
+            if (wire == 0) {
+                long v = 0; sh = 0; ok = false;
+                while (i < b.length) { int x = b[i++] & 0xFF; v |= (long) (x & 0x7F) << sh; sh += 7; if ((x & 0x80) == 0) { ok = true; break; } }
+                if (!ok) return null;
+                f.varint = v;
+            } else if (wire == 2) {
+                long ln = 0; sh = 0; ok = false;
+                while (i < b.length) { int x = b[i++] & 0xFF; ln |= (long) (x & 0x7F) << sh; sh += 7; if ((x & 0x80) == 0) { ok = true; break; } }
+                if (!ok || ln < 0 || i + (int) ln > b.length) return null;
+                f.bytes = new byte[(int) ln];
+                System.arraycopy(b, i, f.bytes, 0, (int) ln);
+                i += (int) ln;
+            } else if (wire == 5) {
+                if (i + 4 > b.length) return null;
+                f.fixed32 = (b[i] & 0xFF) | ((b[i+1] & 0xFF) << 8) | ((b[i+2] & 0xFF) << 16) | ((b[i+3] & 0xFF) << 24);
+                i += 4;
+            } else if (wire == 1) {
+                if (i + 8 > b.length) return null;
+                long v = 0;
+                for (int k = 7; k >= 0; k--) v = (v << 8) | (b[i + k] & 0xFFL);
+                f.fixed64 = v; i += 8;
+            } else return null;
             out.add(f);
         }
         return out;

@@ -336,7 +336,19 @@ public class CmdServer implements WearLink.Log {
                     return null;
                 }
                 case "info": {
-                    ensureLink().deviceStatus();
+                    ensureLink().deviceInfoAll();
+                    return null;
+                }
+                case "battery": {
+                    int[] b = ensureLink().batteryInfo();
+                    return b == null ? null : ("{\"battery\":" + b[0] + ",\"chargeStatus\":" + b[1] + ",\"chargeState\":" + b[2] + "}");
+                }
+                case "devinfo": {
+                    ensureLink().watchInfo();
+                    return null;
+                }
+                case "probe": {
+                    ensureLink().probeInfo(j.optInt("mod"), j.optInt("sub"), j.optInt("timeout", 8000));
                     return null;
                 }
                 case "find": {
