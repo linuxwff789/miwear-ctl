@@ -434,6 +434,12 @@ public class MainActivity extends Activity implements WearLink.Log {
         if (m != null) etMac.setText(m);
         if (k != null) etKey.setText(k);
 
+        // ── 读官方 App 的 auth key（供脚本/界面用；读的是 Termux 导出的文件）──
+        if (it.getBooleanExtra("read_key", false)) {
+            bg(() -> { try { readOfficialKey(); } catch (Exception e) { log("❌ 读官方 key 失败: " + e); } });
+            return;
+        }
+
         // ── 常驻 CLI 服务（App 作为蓝牙后端，认证只做一次）──
         if (it.getBooleanExtra("serve_stop", false)) {
             CmdServer.stop();
