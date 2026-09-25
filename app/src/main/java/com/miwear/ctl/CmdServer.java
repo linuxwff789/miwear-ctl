@@ -364,7 +364,8 @@ public class CmdServer implements WearLink.Log {
                     String hx = j.optString("id", "");
                     if (hx.isEmpty()) throw new IllegalStateException("缺少 id");
                     byte[] id = MainActivity.hex2(hx);
-                    String path = ensureLink().fitnessFetchToFile(id, j.optInt("timeout", 60000));
+                    String path = ensureLink().fitnessFetchToFile(id, j.optInt("timeout", 60000),
+                                                                  j.optBoolean("confirm", true));
                     if (path == null) return "null";
                     File f = new File(path);
                     return "{\"path\":" + JSONObject.quote(path) + ",\"len\":" + f.length()

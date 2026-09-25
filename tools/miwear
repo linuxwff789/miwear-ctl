@@ -27,8 +27,8 @@
 #   probe <module> <sub>      读任意官方信息接口，输出 protobuf 树
 #                             （如 2/62 存储、8/10 心率、8/8 血氧、8/14 压力、8/12 久坐、17/8 睡眠模式）
 #   fitness [ids|history]     列出手表上的健身/睡眠 data id（直接从手表读，不读手机 App）
-#   fitness fetch <id> [文件]   拉一条 data id 的原始数据（表 → 本机，ch5 传输）
-#   sleep [--save <文件>]      看睡眠：拉今日最新的睡眠记录
+#   fitness fetch <id> [文件]   拉一条 data id 的原始数据（表 → 本机，ch5 传输；默认只读不确认）
+#   sleep [--save <文件>] [--json]  看睡眠：拉今日最新睡眠段，判断「现在是否在睡」
 #   find                      找手表：让手表震动/响铃
 #   msg <包名> <文本>          给手表快应用发消息（interconnect）
 #   sync <包名> [状态]         同步手机 App 安装状态
@@ -284,9 +284,9 @@ cmd_probe() {
 
 # ───────── 健身 / 睡眠数据（直接从手表读，module 8 + ch5）─────────
 # 拉一条 data id 的原始数据落盘；回显最终文件路径
-fit_fetch_to() {  # fit_fetch_to <idhex> <outfile>
-  local id=$1 out=$2 json path
-  json=$(rpc_send "$(okjson cmd=fitfetch id="$id")" 180 --raw 2>/dev/null | grep '"ev":"done"' | tail -1)
+fit_fetch_to() {  # fit_fetch_to <idhex> <outfile> [confirm]
+  local id=$1 out=$2 confirm=${3:-false} json path
+  json=$(rpc_send "$(okjson cmd=fitfetch id="$id" confirm="$confirm")" 180 --raw 2>/dev/null | grep '"ev":"done"' | tail -1)
   path=$(printf '%s' "$json" | python3 -c '
 import sys,json
 try: d=json.loads(sys.stdin.read() or "{}")
@@ -321,12 +321,17 @@ cmd_fitness() {
       ;;
     fetch)
       local id=${1:-}; shift || true
-      [ -n "$id" ] || die "用法: miwear fitness fetch <14位hex id> [输出文件]"
+      [ -n "$id" ] || die "用法: miwear fitness fetch <14位hex id> [输出文件] [--confirm]"
       [ ${#id} -eq 14 ] || die "data id 必须是 14 位 hex（7 字节）"
       serve_up || die "需要常驻服务：miwear serve start"
-      local out=${1:-$HOME/miwear-fitness-$(date +%Y%m%d-%H%M%S)-$id.bin}
-      if fit_fetch_to "$id" "$out"; then
-        ok "已保存 $out（$(wc -c < "$out") 字节）"
+      local confirm=false out=""
+      for a in "$@"; do
+        case "$a" in --confirm) confirm=true ;; *) [ -z "$out" ] && out=$a ;; esac
+      done
+      [ -n "$out" ] || out=$HOME/miwear-fitness-$(date +%Y%m%d-%H%M%S)-$id.bin
+      if fit_fetch_to "$id" "$out" "$confirm"; then
+        ok "已保存 $out（$(wc -c < "$out") 字节）$( [ "$confirm" = true ] && echo '，已回 8/5 确认' || echo '（只读，未确认）') "
+        python3 "$(dirname "$0")/fitness_decode.py" "$out" 2>/dev/null | head -24 || true
         echo "$out"
       else
         die "拉取失败（miwear log -n 40 看细节）"
@@ -336,34 +341,60 @@ cmd_fitness() {
   esac
 }
 
-# 看睡眠：优先今日最新的睡眠类 id（午睡/夜间/全天），否则退而取最新 DailyRecord
+# 看睡眠：拉今日最新睡眠段（AllDaySleep）+ 最新打点，判断「现在是否在睡」
 cmd_sleep() {
-  local save=""
+  local save="" asjson=0
   while [ $# -gt 0 ]; do
-    case "$1" in --save) save=${2:-}; shift 2 ;; *) shift ;; esac
+    case "$1" in --save) save=${2:-}; shift 2 ;; --json) asjson=1; shift ;; *) shift ;; esac
   done
   serve_up || die "需要常驻服务：miwear serve start"
-  local json id kind
+  local json
   json=$(fit_ids_json 1)
   [ -n "$json" ] && [ "$json" != "[]" ] || die "没读到健身 data id"
-  read -r id kind < <(printf '%s' "$json" | python3 -c '
+
+  # 选一条最相关的：优先 AllDaySleep(dt8/ft1) > NightSleep(dt3) > DaytimeSleep(dt2) > 最新 DailyRecord
+  local pick
+  pick=$(printf '%s' "$json" | python3 -c '
 import sys,json
 ids=json.load(sys.stdin)
-sl=[i for i in ids if i.get("sleep")]
-if not sl: sl=[i for i in ids if i.get("dailyType")==0 and i.get("fileType")==0]
-if not sl: sl=ids
-sl.sort(key=lambda x: x["ts"], reverse=True)
-print(sl[0]["id"], sl[0]["type"])
+def score(i):
+    if i["dailyType"]==8 and i["fileType"]==1: return 3
+    if i["dailyType"]==3: return 2
+    if i["dailyType"]==2: return 2
+    if i["dailyType"]==0 and i["fileType"]==0: return 1
+    return 0
+best=[i for i in ids if score(i)>0]
+if not best: sys.exit(0)
+best.sort(key=lambda i:(score(i), i["ts"]), reverse=True)
+print(best[0]["id"], best[0]["type"], best[0]["time"])
 ')
-  [ -n "$id" ] || die "没找到可拉的记录"
-  info "最新睡眠相关记录：$kind  $id"
+  [ -n "$pick" ] || die "今天还没读到的睡眠记录"
+  set -- $pick
+  local id=$1 kind="$2 $3"
+  info "最新睡眠相关记录：$kind"
+
   local out=${save:-$HOME/miwear-sleep-$(date +%Y%m%d-%H%M%S)-$id.bin}
-  if fit_fetch_to "$id" "$out"; then
-    ok "已保存 $out（$(wc -c < "$out") 字节）"
-    python3 "$(dirname "$0")/fitness_decode.py" "$out" 2>/dev/null || true
+  fit_fetch_to "$id" "$out" false || die "拉取失败（miwear log -n 40 看细节）"
+  ok "已保存 $out（$(wc -c < "$out") 字节，只读未确认）"
+  if [ $asjson -eq 1 ]; then
+    python3 "$(dirname "$0")/fitness_decode.py" "$out" --json
   else
-    die "拉取失败（miwear log -n 40 看细节）"
+    python3 "$(dirname "$0")/fitness_decode.py" "$out"
   fi
+
+  # 结论
+  python3 "$(dirname "$0")/fitness_decode.py" "$out" --json 2>/dev/null | python3 -c '
+import sys,json,time
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(0)
+s=d.get("sleep")
+if not s: sys.exit(0)
+if s.get("isSleepFinish"):
+    print("结论 : 现在清醒（这一段睡眠已结束：%s → %s）" % (d["id"]["ts"], s["wakeupTime"]))
+else:
+    print("结论 : 正在睡觉！（本段尚未结束，入睡 %s，已 %.1f 小时）"
+          % (s["bedTime"], (time.time()-s["bedTime"])/3600))
+'
 }
 
 # 找手表：让手表震动/响铃（module 2 sub 18）

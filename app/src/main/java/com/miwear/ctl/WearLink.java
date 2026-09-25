@@ -1064,6 +1064,15 @@ public class WearLink {
      *   收完发 oyt{f1=8, f2=5, f10=rma{f3=id}} 确认
      */
     public byte[] fitnessFetch(byte[] id, long timeoutMs) throws Exception {
+        return fitnessFetch(id, timeoutMs, true);
+    }
+
+    /**
+     * @param confirm 收完后是否发 8/5 确认。
+     *   ⚠️ 确认后设备会删掉这条记录（官方注释：“不完整的睡眠段在同步到 App 之后设备端删除即可”），
+     *   所以只读轮询要传 false，否则同一条记录拿不到第二次。
+     */
+    public byte[] fitnessFetch(byte[] id, long timeoutMs, boolean confirm) throws Exception {
         if (id == null || id.length != 7) throw new IllegalArgumentException("data id 必须是 7 字节");
         FitId fi = new FitId(id);
         ByteArrayOutputStream rma = new ByteArrayOutputStream();
@@ -1087,12 +1096,16 @@ public class WearLink {
                 fitLock.wait(Math.max(1, Math.min(500, end - System.currentTimeMillis())));
             }
         }
-        try {
-            ByteArrayOutputStream r2 = new ByteArrayOutputStream();
-            PB.bytes(r2, 3, id);
-            sendEncrypted(Framing.CH_PB, oyt(8, 5, 10, r2.toByteArray()));
-            log.log("→ 已确认(8/5) " + fi.hex());
-        } catch (Exception e) { log.log("⚠ 确认 8/5 失败: " + e); }
+        if (confirm) {
+            try {
+                ByteArrayOutputStream r2 = new ByteArrayOutputStream();
+                PB.bytes(r2, 3, id);
+                sendEncrypted(Framing.CH_PB, oyt(8, 5, 10, r2.toByteArray()));
+                log.log("→ 已确认(8/5) " + fi.hex());
+            } catch (Exception e) { log.log("⚠ 确认 8/5 失败: " + e); }
+        } else {
+            log.log("（只读模式：不发 8/5 确认，记录保留在手表上）");
+        }
         if (got == null) { log.log("✗ 没收到健身数据（超时 " + timeoutMs + "ms）"); return null; }
         if (got.length >= 7) {
             FitId back = new FitId(java.util.Arrays.copyOfRange(got, 0, 7));
@@ -1104,7 +1117,12 @@ public class WearLink {
 
     /** 拉数据并落盘到 App 私有目录 files/fitness/，返回文件路径 */
     public String fitnessFetchToFile(byte[] id, long timeoutMs) throws Exception {
-        byte[] data = fitnessFetch(id, timeoutMs);
+        return fitnessFetchToFile(id, timeoutMs, true);
+    }
+
+    /** 拉数据并落盘到 App 私有目录 files/fitness/，返回文件路径 */
+    public String fitnessFetchToFile(byte[] id, long timeoutMs, boolean confirm) throws Exception {
+        byte[] data = fitnessFetch(id, timeoutMs, confirm);
         if (data == null) return null;
         java.io.File dir = new java.io.File(APP.getFilesDir(), "fitness");
         dir.mkdirs();
