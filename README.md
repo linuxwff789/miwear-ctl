@@ -38,6 +38,7 @@
 | 手表状态（电量/充电） | `2/1` | `battery` `info` | 电量/设备信息 | ✅ |
 | 设备信息（固件/型号/SN） | `2/2` | `info` | 电量+设备信息 | ✅ |
 | 读任意信息/设置接口 | 任意 module/sub | `probe <mod> <sub>` | 读信息 / 存储 / 心率 / 血氧 / 压力 / 久坐 / 睡眠 / 息屏 | ✅ |
+| **健身/睡眠数据（直接读表）** | `8/1`、`8/2`、`8/4`、`8/5` + **ch5** | `fitness ids\|fetch`、`sleep` | 列出 data id / 拉记录 / 判“是否在睡” | ✅ |
 | 找手表（震动/响铃） | `2/18` | `find` | — | ✅ |
 | 同步手机 App 安装状态 | `20/7` | `sync` | — | ✅ |
 | 手机状态回传（锁屏/亮屏） | `23/0→23/1` | 自动应答 | — | ✅ |
@@ -147,6 +148,59 @@ miwear net [--launch <包名> [uri]]    # 启动手表联网网关（手机侧 N
 miwear raw <hex>                      # 发任意 oyt（加密）并打印应答，调试用
 miwear log [-n 行数] [-f]             # 看日志
 ```
+
+### 健身 / 睡眠数据（直接从手表读，不经官方 App）
+
+```bash
+miwear fitness ids                    # 今日待同步 data id（含类型/时间/版本解码）
+miwear fitness history                # 历史 data id
+miwear fitness fetch <14位hex id> [文件] [--confirm]
+                                      # 拉一条记录的原始数据（ch5 分片、组装、CRC32 校验）
+miwear sleep [--save <文件>] [--json]  # 看睡眠：拉今日最新睡眠段并给结论（现在清醒 / 正在睡觉）
+```
+
+实测（REDMI Watch 5，2026-09-25）：
+
+```
+$ miwear sleep
+· 最新睡眠相关记录：AllDaySleep(全天睡眠) 09-25
+✓ 已保存 ~/miwear-sleep-20260925-224429-706fb56a200421.bin（31782 字节，只读未确认）
+data id: 706fb56a200421    时间: 09-25 02:44:00  ver=4
+── 睡眠 ──
+  本次是否已结束 : True
+  上床 / 入睡    : 09-25 02:44:00 / 09-25 02:44:00
+  醒来 / 起床    : 09-25 08:12:00
+  hrSeries     : 385 点，间隔 60s，有效 39，均值 74.3（63~90）
+结论 : 现在清醒（这段睡眠已结束：09-25 02:44 → 09-25 08:12，共 5.5 小时）
+```
+
+> ⚠️ **拉完默认不发 `8/5` 确认**：确认后设备会删掉这条记录（官方注释：不完整的睡眠段同步到 App 后
+> 设备端删除），同一条 id 就再也取不到了。轮询场景必须只读；确实要告知手表“已消费”才加 `--confirm`。
+
+记录二进制格式（逆向自 `com.xiaomi.fit.fitness` + 官方 `assets/schemas.zip`）：
+
+```
+<7B data id> 0x00 <dataValid N 字节> <body>
+  data id   = ts(4 LE) | tzIn15Min(1) | version(1) | type(1)
+  type      = (dataType<<7) | (sportType<<2) | (dailyType<<2) | fileType
+  dataValid = 有效性位图（大端，byte0 的 bit7 为第 0 位）；长度按类型/版本固定：
+              DailyRecord v3=5B，AllDaySleep v1~4=1B / v5=2B / v6=3B
+```
+
+类型映射（`dailyType`）：0=DailyRecord/DailyReport、2=午睡、3=夜间睡眠、8=全天睡眠(AllDaySleep)、
+9=异常、10=体重、11=ECG、12=体温、31=运动。`fileType`：0=打点、1=报告、2=GPS。
+
+- **AllDaySleep（v4，native）**：`isSleepFinish(1B)` `bedTime(4B)` `wakeupTime(4B)`
+  `sleepQuality(1B, ver≥4)`，其后每个有效打点段 = `间隔(2B) 个数(2B) 首点时间(4B) 值×个数`
+  （心率 1B / 血氧 1B / 鼾声 float32）。**`isSleepFinish=0` 就是“这一段还没结束” → 正在睡。**
+- **DailyRecord（v3，schema）**：体是每分钟一条的定长项，按有效性位决定哪些字段在：
+  `heartRateAndStep(2B: bit14=心率升高标记,bit13..0=新增步数)`、`activeTypeAndCalories(1B:bit7..6=活动类型,bit5..0=卡路里)`、
+  `activeStrengthAndSportType(1B)`、`newDistance(2B)`、`heartRate(1B)`、`dumpEnergy(1B)`、
+  `caloriesAndEnergy(2B:bit15..10=总卡路里,bit9..8=能量状态,bit7..0=能量值带符号)`、`bloodOxygen(1B)`、`curPressure(1B)`。
+  手表每 ~4 分钟生成一条新 DailyRecord，可当近实时活动/心率读数用。
+
+> 官方 schema 全量在 Mi Health APK 的 `assets/schemas.zip`（`index.json` 按类型/版本索引），
+> 本项目只实现了上面两类；其它类型可照同办法扩。
 
 ### auth key / 绑定（重点，见下节）
 
@@ -322,7 +376,9 @@ miwear bind --yes       # 真绑 → 生成新 key 并保存
 | 久坐提醒 | `8/12` | `f9{f2=8点, f3=22点, f6=12点, f7=14点, f4=1}` |
 | 睡眠模式 | `17/8` | `f9{f1=0, f3=1}` |
 | 息屏显示(AOD) | `2/65` | `f100=1`（开） |
-| 今日健康 data id | `8/1` | 返回 data id 列表（健康数据本体还要 `8/3`/`8/4` + schema 解析） |
+| 今日健康 data id | `8/1` | 返回 data id 列表（`miwear fitness ids` 已解出类型/时间/版本） |
+| **睡眠段（AllDaySleep）** | `8/1` 里的 dt8/ft1 → `fitness fetch` | 入睡/起床/是否结束/心率串（`miwear sleep`） |
+| **分钟级活动** | `8/1` 里的 dt0/ft0 → `fitness fetch` | 每分钟步数/活动类型/心率/血氧/压力/卡路里 |
 
 用法：`miwear probe <module> <sub>`（App 界面上是「读信息」/ 各个快捷按钮）。
 
@@ -423,10 +479,15 @@ gradle assembleRelease        # 产物 app/build/outputs/apk/release/app-release
 现在 `miwear info` / `miwear battery` 都走这个。
 
 **Q：健康数据（步数/心率/睡眠）能直接读吗？**
-手表把健康数据当作“数据包”同步：`module 8 sub 1`（今日 id）/`sub 2`（历史 id）先拿一批 data id，
-再 `sub 3/4` 拉数据，最后 `sub 5` 确认；数据本体是 schema 驱动的二进制（官方有一套 fitness-schema-parser）。
-目前 `miwear probe 8 1` 能看到 data id；完整解析还没做。
-**健康“设置类”是可直接读的**：心率 `8/10`、血氧 `8/8`、压力 `8/14`、久坐 `8/12`、睡眠模式 `17/8`。
+能，已实现：`miwear fitness ids` 列 data id，`miwear fitness fetch <id>` 经 **ch5 (FILE_FITNESS)**
+分片拉回整条记录，`miwear sleep` 直接给“现在清醒/正在睡觉”的结论；解析器 `tools/fitness_decode.py`
+已支持 **AllDaySleep**（入睡/起床/心率串）和 **DailyRecord**（每分钟步数/活动/心率/血氧/压力）。
+格式细节见上文「健身 / 睡眠数据」一节。
+
+> 数据是**从手表直接读**的（不读手机 App 缓存）：`8/1` 今日 id → `8/4`（`rma.f3`=7 字节 id）→ 手表从
+> **ch5** 推回加密分片（`[total u16][seq u16][chunk]`，最后 4 字节 CRC32）→ 拼成 `<7B id><00><dataValid><body>`。
+> 轮询时**不要**发 `8/5` 确认，否则设备会删掉该记录。
+- **健康“设置类”也是可直接读的**：心率 `8/10`、血氧 `8/8`、压力 `8/14`、久坐 `8/12`、睡眠模式 `17/8`。
 
 **Q：手表 SPP 连不上？**
 先 `am force-stop com.mi.health`（CLI 已自动做），或设 `MIWEAR_BTRESET=1` 重启蓝牙清残留连接。

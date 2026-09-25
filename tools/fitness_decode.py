@@ -266,18 +266,22 @@ def main():
         if s.get("sleepQuality") is not None:
             print("  睡眠呼吸质量   : %s" % s["sleepQuality"])
         for name, ser in (res.get("series") or {}).items():
-            v = ser["values"]
-            print("  %-10s: %d 点，间隔 %ds，首点 %s，均值 %.1f"
+            v = [x for x in ser["values"] if x not in (0, None)]
+            print("  %-11s: %d 点，间隔 %ds，首点 %s，有效 %d，均值 %.1f（%d~%d）"
                   % (name, ser["count"], ser["interval"], t(ser["firstTime"]),
-                     (sum(v) / len(v)) if v else 0))
+                     len(v), (sum(v) / len(v)) if v else 0,
+                     min(v) if v else 0, max(v) if v else 0))
     elif res.get("kind") == "DailyRecord":
-        print("── 分钟级记录（共 %d 条）──" % res["itemCount"])
+        print("── 分钟级记录（共 %d 条，每条 1 分钟）──" % res["itemCount"])
         print("  存在字段:", ", ".join(res["present"]))
-        for k, it in enumerate(res["items"][:5]):
+        items = res["items"]
+        if last:
+            items = items[-last:]
+        for k, it in enumerate(items[:6]):
             print("   #%d %s" % (k, it))
-        if res["itemCount"] > 5:
+        if len(items) > 9:
             print("   …")
-            for k, it in enumerate(res["items"][-3:], res["itemCount"] - 3):
+            for k, it in enumerate(items[-3:], len(items) - 3):
                 print("   #%d %s" % (k, it))
     else:
         print("body   : %s" % body[:64].hex(" "))

@@ -317,7 +317,7 @@ cmd_fitness() {
     ids|history)
       local s=1; [ "$sub" = history ] && s=2
       serve_up || die "需要常驻服务：miwear serve start"
-      rpc_send "$(okjson cmd=fitids sub=$s)" 60
+      rpc_send "$(okjson cmd=fitids sub=$s)" 60 | grep -v '^\[{'
       ;;
     fetch)
       local id=${1:-}; shift || true
@@ -387,13 +387,16 @@ print(best[0]["id"], best[0]["type"], best[0]["time"])
 import sys,json,time
 try: d=json.load(sys.stdin)
 except Exception: sys.exit(0)
+def f(x):
+    return time.strftime("%m-%d %H:%M", time.localtime(x)) if x else "-"
 s=d.get("sleep")
 if not s: sys.exit(0)
 if s.get("isSleepFinish"):
-    print("结论 : 现在清醒（这一段睡眠已结束：%s → %s）" % (d["id"]["ts"], s["wakeupTime"]))
+    print("结论 : 现在清醒（这段睡眠已结束：%s → %s，共 %.1f 小时）"
+          % (f(s["bedTime"]), f(s["wakeupTime"]), (s["wakeupTime"]-s["bedTime"])/3600))
 else:
-    print("结论 : 正在睡觉！（本段尚未结束，入睡 %s，已 %.1f 小时）"
-          % (s["bedTime"], (time.time()-s["bedTime"])/3600))
+    print("结论 : 😴 正在睡觉！（本段尚未结束，入睡 %s，已 %.1f 小时）"
+          % (f(s["bedTime"]), (time.time()-s["bedTime"])/3600))
 '
 }
 
