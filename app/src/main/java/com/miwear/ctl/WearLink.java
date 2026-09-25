@@ -1034,6 +1034,21 @@ public class WearLink {
                     else note = "，CRC32 ❌(" + String.format("%08x", gotCrc) + "/" + String.format("%08x", want) + ")";
                 }
                 fitPayload = java.util.Arrays.copyOf(all, n);
+                // 手表会在连接后主动推积压记录（不只应答 8/4）→ 一律落盘，CLI 可随时解
+                if (fitPayload.length >= 7) {
+                    FitId got = new FitId(java.util.Arrays.copyOfRange(fitPayload, 0, 7));
+                    log.log("📥 健身记录 " + got.describe() + "（body " + (fitPayload.length - 7) + "B）");
+                    try {
+                        if (APP != null) {
+                            java.io.File dir = new java.io.File(APP.getFilesDir(), "fitness");
+                            dir.mkdirs();
+                            java.io.File out = new java.io.File(dir, got.hex() + ".bin");
+                            try (java.io.FileOutputStream fo = new java.io.FileOutputStream(out)) {
+                                fo.write(fitPayload);
+                            }
+                        }
+                    } catch (Exception e) { log.log("⚠ 保存健身记录失败: " + e); }
+                }
                 log.log("← ch5 健身数据收齐: " + all.length + "B → 载荷 " + n + "B" + note);
                 fitLock.notifyAll();
             }

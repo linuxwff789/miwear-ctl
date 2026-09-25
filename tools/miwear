@@ -26,9 +26,9 @@
 #   battery                   只读电量/充电状态（module 2 sub 1）
 #   probe <module> <sub>      读任意官方信息接口，输出 protobuf 树
 #                             （如 2/62 存储、8/10 心率、8/8 血氧、8/14 压力、8/12 久坐、17/8 睡眠模式）
-#   fitness [ids|history]     列出手表上的健身/睡眠 data id（直接从手表读，不读手机 App）
+#   fitness [ids|history|pushed]  列今日 data id / 历史 id / 手表已推送并落盘的记录
 #   fitness fetch <id> [文件]   拉一条 data id 的原始数据（表 → 本机，ch5 传输；默认只读不确认）
-#   sleep [--save <文件>] [--json]  看睡眠：拉今日最新睡眠段，判断「现在是否在睡」
+#   sleep [--save <文件>] [--json] [--watch [--interval 秒]]  看睡眠：判断「现在是否在睡」（--watch 常驻盯变化）
 #   find                      找手表：让手表震动/响铃
 #   msg <包名> <文本>          给手表快应用发消息（interconnect）
 #   sync <包名> [状态]         同步手机 App 安装状态
@@ -311,6 +311,88 @@ print(json.dumps(d.get("data") or [], ensure_ascii=False))
 ' 2>/dev/null
 }
 
+# 从 ids JSON 里选出「最相关的睡眠段」：dt8/ft1 > dt3 > dt2 > 最新 DailyRecord
+fit_pick() {  # stdin: ids JSON → "<id> <type> <time>"
+  python3 -c '
+import sys,json
+ids=json.load(sys.stdin)
+def score(i):
+    if i["dailyType"]==8 and i["fileType"]==1: return 3
+    if i["dailyType"] in (2,3): return 2
+    if i["dailyType"]==0 and i["fileType"]==0: return 1
+    return 0
+best=[i for i in ids if score(i)>0]
+if not best: sys.exit(0)
+best.sort(key=lambda i:(score(i), i["ts"]), reverse=True)
+print(best[0]["id"], best[0]["type"], best[0]["time"])
+'
+}
+# 只看睡眠段（不含 DailyRecord）
+fit_pick_sleep() {
+  python3 -c '
+import sys,json
+ids=json.load(sys.stdin)
+sl=[i for i in ids if i.get("sleep")]
+if not sl: sys.exit(0)
+sl.sort(key=lambda i:i["ts"], reverse=True)
+print(sl[0]["id"], sl[0]["type"], sl[0]["time"])
+'
+}
+
+fit_pushed() {  # 手表推送并落盘的记录：<ts> <id> <type> <ver> <dailyType> <fileType>，按时间倒序
+  su -c "ls -1 /data/data/$PKG/files/fitness/*.bin 2>/dev/null" 2>/dev/null \
+    | sed 's#.*/##; s#\.bin$##' | python3 -c '
+import sys
+DAILY={0:{0:"DailyRecord",1:"DailyReport"},2:"DaytimeSleep",3:"NightSleep",5:"UserProfile",6:"ManualMeasure",8:"AllDaySleep",9:"Abnormal",10:"Weight",11:"ECG",12:"Temperature"}
+rows=[]
+for line in sys.stdin:
+    h=line.strip()
+    try: b=bytes.fromhex(h)
+    except Exception: continue
+    if len(b)<7: continue
+    ts=int.from_bytes(b[:4],"little"); ver,t=b[5],b[6]
+    dt=(t>>7)&1; daily=0 if dt else (t&0x7f)>>2; ft=t&3
+    n=DAILY.get(daily)
+    name=n.get(ft,"daily%d/file%d"%(daily,ft)) if isinstance(n,dict) else (n or "daily%d/file%d"%(daily,ft))
+    rows.append((ts,h,name,ver,daily,ft))
+rows.sort(reverse=True)
+for ts,h,name,ver,daily,ft in rows:
+    print(ts,h,name,ver,daily,ft)
+'
+}
+
+# 从推送文件里选最新的一条睡眠段（dt8/ft1 优先，其次 dt3/dt2）
+fit_pushed_sleep() {
+  fit_pushed | python3 -c '
+import sys
+best=None
+for line in sys.stdin:
+    f=line.split()
+    if len(f)<6: continue
+    ts,h,name,ver,daily,ft=int(f[0]),f[1],f[2],f[3],int(f[4]),int(f[5])
+    sc=3 if (daily==8 and ft==1) else (2 if daily in (2,3) else 0)
+    if sc and (best is None or (sc,ts)>(best[0],best[1])): best=(sc,ts,h,name)
+if best: print(best[2],best[3])
+'
+}
+
+fit_conclusion() {  # fit_conclusion <bin文件>
+  python3 "$(dirname "$0")/fitness_decode.py" "$1" --json 2>/dev/null | python3 -c '
+import sys,json,time
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(0)
+def f(x): return time.strftime("%m-%d %H:%M", time.localtime(x)) if x else "-"
+s=d.get("sleep")
+if not s: sys.exit(0)
+if s.get("isSleepFinish"):
+    print("结论 : 现在清醒（这段睡眠：%s → %s，共 %.1f 小时）"
+          % (f(s["bedTime"]), f(s["wakeupTime"]), (s["wakeupTime"]-s["bedTime"])/3600))
+else:
+    print("结论 : 😴 正在睡觉！（尚未结束，入睡 %s，已 %.1f 小时）"
+          % (f(s["bedTime"]), (time.time()-s["bedTime"])/3600))
+'
+}
+
 cmd_fitness() {
   local sub=${1:-ids}; shift || true
   case "$sub" in
@@ -318,6 +400,12 @@ cmd_fitness() {
       local s=1; [ "$sub" = history ] && s=2
       serve_up || die "需要常驻服务：miwear serve start"
       rpc_send "$(okjson cmd=fitids sub=$s)" 60 | grep -v '^\[{'
+      ;;
+    pushed)
+      fit_pushed | while read -r ts h name ver daily ft; do
+        printf '  • %s  %-24s ver=%s {daily=%s, file=%s}  id=%s\n' \
+          "$(date -d @$ts '+%m-%d %H:%M:%S' 2>/dev/null || echo "@$ts")" "$name" "$ver" "$daily" "$ft" "$h"
+      done
       ;;
     fetch)
       local id=${1:-}; shift || true
@@ -337,37 +425,78 @@ cmd_fitness() {
         die "拉取失败（miwear log -n 40 看细节）"
       fi
       ;;
-    *) die "用法: miwear fitness [ids|history|fetch <id>]" ;;
+    *) die "用法: miwear fitness [ids|history|pushed|fetch <id>]" ;;
   esac
 }
 
 # 看睡眠：拉今日最新睡眠段（AllDaySleep）+ 最新打点，判断「现在是否在睡」
+#   miwear sleep [--save <文件>] [--json] [--watch] [--interval 秒]
 cmd_sleep() {
-  local save="" asjson=0
+  local save="" asjson=0 watch=0 interval=120
   while [ $# -gt 0 ]; do
-    case "$1" in --save) save=${2:-}; shift 2 ;; --json) asjson=1; shift ;; *) shift ;; esac
+    case "$1" in
+      --save) save=${2:-}; shift 2 ;;
+      --json) asjson=1; shift ;;
+      --watch) watch=1; shift ;;
+      --interval) interval=${2:-120}; shift 2 ;;
+      *) shift ;;
+    esac
   done
   serve_up || die "需要常驻服务：miwear serve start"
+
+  if [ "$watch" = 1 ]; then
+    local last="" lastconcl="暂无"
+    info "盯睡眠中（每 ${interval}s 一次，Ctrl-C 退出；表主动推送的记录会落盘）…"
+    while true; do
+      local pick
+      pick=$(fit_pushed_sleep)
+      if [ -n "$pick" ]; then
+        set -- $pick
+        local id=$1 kind=$2
+        if [ "$id" != "$last" ]; then
+          last=$id
+          local tmp=$HOME/.miwear-sleep-watch.bin
+          if su -c "cat /data/data/$PKG/files/fitness/$id.bin" > "$tmp" 2>/dev/null; then
+            echo "[$(date '+%m-%d %H:%M:%S')] 🆕 睡眠记录 $id  $kind"
+            python3 "$(dirname "$0")/fitness_decode.py" "$tmp" | sed -n '5,11p'
+            lastconcl=$(fit_conclusion "$tmp")
+            echo "$lastconcl"
+          fi
+        else
+          echo "[$(date '+%m-%d %H:%M:%S')] 无变化  $lastconcl"
+        fi
+      else
+        echo "[$(date '+%m-%d %H:%M:%S')] 暂无可用的睡眠段（等手表推送 / 或单跑一次 miwear sleep）"
+      fi
+      sleep "$interval"
+    done
+  fi
+
+  # 一次性：优先用手表已推送的记录，没有才去拉 ids
+  local pushed
+  pushed=$(fit_pushed_sleep)
+  if [ -n "$pushed" ]; then
+    set -- $pushed
+    local pid=$1 pkind=$2
+    info "用手表已推送的睡眠记录：$pkind"
+    local pout=${save:-$HOME/miwear-sleep-$(date +%Y%m%d-%H%M%S)-$pid.bin}
+    su -c "cat /data/data/$PKG/files/fitness/$pid.bin" > "$pout" 2>/dev/null || die "读推送文件失败"
+    ok "已保存 $pout（$(wc -c < "$pout") 字节）"
+    if [ $asjson -eq 1 ]; then
+      python3 "$(dirname "$0")/fitness_decode.py" "$pout" --json
+    else
+      python3 "$(dirname "$0")/fitness_decode.py" "$pout"
+    fi
+    fit_conclusion "$pout"
+    return 0
+  fi
+
   local json
   json=$(fit_ids_json 1)
   [ -n "$json" ] && [ "$json" != "[]" ] || die "没读到健身 data id"
 
-  # 选一条最相关的：优先 AllDaySleep(dt8/ft1) > NightSleep(dt3) > DaytimeSleep(dt2) > 最新 DailyRecord
   local pick
-  pick=$(printf '%s' "$json" | python3 -c '
-import sys,json
-ids=json.load(sys.stdin)
-def score(i):
-    if i["dailyType"]==8 and i["fileType"]==1: return 3
-    if i["dailyType"]==3: return 2
-    if i["dailyType"]==2: return 2
-    if i["dailyType"]==0 and i["fileType"]==0: return 1
-    return 0
-best=[i for i in ids if score(i)>0]
-if not best: sys.exit(0)
-best.sort(key=lambda i:(score(i), i["ts"]), reverse=True)
-print(best[0]["id"], best[0]["type"], best[0]["time"])
-')
+  pick=$(printf '%s' "$json" | fit_pick)
   [ -n "$pick" ] || die "今天还没读到的睡眠记录"
   set -- $pick
   local id=$1 kind="$2 $3"
@@ -381,23 +510,7 @@ print(best[0]["id"], best[0]["type"], best[0]["time"])
   else
     python3 "$(dirname "$0")/fitness_decode.py" "$out"
   fi
-
-  # 结论
-  python3 "$(dirname "$0")/fitness_decode.py" "$out" --json 2>/dev/null | python3 -c '
-import sys,json,time
-try: d=json.load(sys.stdin)
-except Exception: sys.exit(0)
-def f(x):
-    return time.strftime("%m-%d %H:%M", time.localtime(x)) if x else "-"
-s=d.get("sleep")
-if not s: sys.exit(0)
-if s.get("isSleepFinish"):
-    print("结论 : 现在清醒（这段睡眠已结束：%s → %s，共 %.1f 小时）"
-          % (f(s["bedTime"]), f(s["wakeupTime"]), (s["wakeupTime"]-s["bedTime"])/3600))
-else:
-    print("结论 : 😴 正在睡觉！（本段尚未结束，入睡 %s，已 %.1f 小时）"
-          % (f(s["bedTime"]), (time.time()-s["bedTime"])/3600))
-'
+  fit_conclusion "$out"
 }
 
 # 找手表：让手表震动/响铃（module 2 sub 18）
