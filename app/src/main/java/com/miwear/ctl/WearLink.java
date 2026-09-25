@@ -127,6 +127,13 @@ public class WearLink {
                     if (f.type == Framing.TYPE_DATA && f.channel() != 10) {
                         try { ack(f); } catch (Exception ignored) {}
                     }
+                    // 通道 5 = FILE_FITNESS：健身数据分片（加密）→ 组装成完整记录
+                    if (f.type == Framing.TYPE_DATA && f.channel() == Framing.CH_FILE_FITNESS && keys != null) {
+                        byte[] fpt = f.opCode() == Framing.OP_WRITE_ENC
+                                   ? Crypto.ctr(keys.deviceKey, f.data()) : f.data();
+                        if (fpt != null) onFitnessChunk(fpt);
+                        continue;
+                    }
                     // 认证后：解密 ch1 帧。module18/0 自动应答；设备心跳(2/2)丢弃；其余入队给 request()
                     if (f.type == Framing.TYPE_DATA && f.channel() == Framing.CH_PB
                             && f.opCode() == Framing.OP_WRITE_ENC && keys != null) {
@@ -919,6 +926,193 @@ public class WearLink {
             }
         }
         return false;
+    }
+
+    // ───────── 健身数据（module 8，ch5 = FILE_FITNESS）─────────
+
+    /**
+     * 7 字节 data id（逆向自 com.xiaomi.fit.data.common.data.mi.FitnessDataId）：
+     *   [0:4] 时间戳 u32 LE  [4] 时区(15min 单位，+8:00=0x20)  [5] 版本  [6] 类型
+     *   类型 = (dataType&lt;&lt;7) | (sportType&lt;&lt;2) | (dailyType&lt;&lt;2) | fileType
+     */
+    public static final class FitId {
+        public final byte[] raw;
+        public final long ts;
+        public final int tzIn15Min, version, dataType, sportType, dailyType, fileType;
+
+        public FitId(byte[] b) {
+            raw = b;
+            ts = (b[0] & 0xFFL) | ((b[1] & 0xFFL) << 8) | ((b[2] & 0xFFL) << 16) | ((b[3] & 0xFFL) << 24);
+            tzIn15Min = b[4] & 0xFF;
+            version = b[5] & 0xFF;
+            int t = b[6] & 0xFF;
+            dataType = (t >> 7) & 1;
+            int mid = (t & 0x7F) >> 2;
+            sportType = dataType == 1 ? mid : 0;
+            dailyType = dataType == 1 ? 0 : mid;
+            fileType = t & 3;
+        }
+
+        public String typeName() {
+            if (dataType == 1) return "Sport(" + sportType + ")";
+            switch (dailyType) {
+                case 0:  return fileType == 0 ? "DailyRecord(分钟级活动/睡眠)" : fileType == 1 ? "DailyReport(日汇总)" : "Daily?" + fileType;
+                case 2:  return "DaytimeSleep(午睡)";
+                case 3:  return "NightSleep(夜间睡眠)";
+                case 5:  return "UserProfile";
+                case 6:  return "ManualMeasure(手动测量)";
+                case 8:  return "AllDaySleep(全天睡眠)";
+                case 9:  return "AbnormalRecord";
+                case 10: return "WeightRecord";
+                case 11: return "EcgMeasure";
+                case 12: return "TemperatureMeasure";
+                default: return "dailyType=" + dailyType + "/fileType=" + fileType;
+            }
+        }
+
+        /** 是否跟睡眠有关 */
+        public boolean isSleep() { return dataType == 0 && (dailyType == 2 || dailyType == 3 || dailyType == 8); }
+
+        public String timeStr() {
+            try {
+                return new java.text.SimpleDateFormat("MM-dd HH:mm:ss")
+                        .format(new java.util.Date(ts * 1000L));
+            } catch (Exception e) { return String.valueOf(ts); }
+        }
+
+        public String hex() { return Crypto.hex(raw); }
+
+        public String describe() {
+            return timeStr() + "  " + typeName() + "  ver=" + version
+                 + " {dt=" + dataType + ", daily=" + dailyType + ", file=" + fileType + "}"
+                 + "  id=" + hex();
+        }
+
+        public String toJson() {
+            return "{\"id\":\"" + hex() + "\",\"ts\":" + ts
+                 + ",\"time\":" + org.json.JSONObject.quote(timeStr())
+                 + ",\"type\":" + org.json.JSONObject.quote(typeName())
+                 + ",\"dataType\":" + dataType + ",\"sportType\":" + sportType
+                 + ",\"dailyType\":" + dailyType + ",\"fileType\":" + fileType
+                 + ",\"version\":" + version + ",\"sleep\":" + isSleep() + "}";
+        }
+    }
+
+    private final Object fitLock = new Object();
+    private ByteArrayOutputStream fitBuf;
+    private int fitTotal, fitSeq;
+    private byte[] fitPayload;      // 组装好的 id(7B)+body（已去 CRC）
+
+    /** ch5 收到一片健身数据（已解密）：[total u16][seq u16][chunk] */
+    private void onFitnessChunk(byte[] pt) {
+        if (pt.length < 4) return;
+        int total = (pt[0] & 0xFF) | ((pt[1] & 0xFF) << 8);
+        int seq = (pt[2] & 0xFF) | ((pt[3] & 0xFF) << 8);
+        synchronized (fitLock) {
+            if (seq == 1) { fitBuf = new ByteArrayOutputStream(); fitTotal = total; fitSeq = 0; }
+            if (fitBuf == null) return;                    // 没见过 seq=1，忽略
+            if (total != fitTotal || seq != fitSeq + 1) {
+                log.log("⚠ 健身分片乱序 seq=" + seq + "/" + total + "（丢弃本次）");
+                fitBuf = null;
+                return;
+            }
+            fitBuf.write(pt, 4, pt.length - 4);
+            fitSeq = seq;
+            if (seq == total || seq % 20 == 0) log.log("← ch5 健身分片 " + seq + "/" + total);
+            if (seq == total) {
+                byte[] all = fitBuf.toByteArray();
+                fitBuf = null;
+                int n = all.length;
+                String note = "";
+                if (all.length >= 8) {
+                    java.util.zip.CRC32 c = new java.util.zip.CRC32();
+                    c.update(all, 0, all.length - 4);
+                    int want = (int) c.getValue();
+                    int gotCrc = (all[n - 4] & 0xFF) | ((all[n - 3] & 0xFF) << 8)
+                               | ((all[n - 2] & 0xFF) << 16) | ((all[n - 1] & 0xFF) << 24);
+                    if (want == gotCrc) { note = "，CRC32 ✅"; n = all.length - 4; }
+                    else note = "，CRC32 ❌(" + String.format("%08x", gotCrc) + "/" + String.format("%08x", want) + ")";
+                }
+                fitPayload = java.util.Arrays.copyOf(all, n);
+                log.log("← ch5 健身数据收齐: " + all.length + "B → 载荷 " + n + "B" + note);
+                fitLock.notifyAll();
+            }
+        }
+    }
+
+    /** module 8 sub 1/2：今日 / 历史 待同步 data id 列表 */
+    public List<FitId> fitnessIds(int sub) throws Exception {
+        byte[] pt = request(oyt(8, sub, 0, null), 8000);
+        List<FitId> out = new ArrayList<>();
+        if (pt == null) { log.log("健身 id(8/" + sub + "): 无应答"); return out; }
+        byte[] blob = null;
+        for (PB.F f10 : PB.parse(pt)) {
+            if (f10.field != 10 || f10.bytes == null) continue;
+            for (PB.F g : PB.parse(f10.bytes)) if (g.bytes != null && g.bytes.length >= 7) blob = g.bytes;
+        }
+        if (blob == null) { log.log("健身 id(8/" + sub + "): 应答里没有 id 列表"); return out; }
+        for (int i = 0; i + 7 <= blob.length; i += 7)
+            out.add(new FitId(java.util.Arrays.copyOfRange(blob, i, i + 7)));
+        log.log((sub == 1 ? "今日" : "历史") + "健身 data id（" + out.size() + " 条）:");
+        for (FitId id : out) log.log("  • " + id.describe());
+        return out;
+    }
+
+    /**
+     * 拉一条 data id 的数据：官方 FitnessWearPbImpl.requestFitnessIds
+     *   7B id  →  oyt{f1=8, f2=4, f10=rma{f3=id}}   数据从 ch5 回来
+     *   收完发 oyt{f1=8, f2=5, f10=rma{f3=id}} 确认
+     */
+    public byte[] fitnessFetch(byte[] id, long timeoutMs) throws Exception {
+        if (id == null || id.length != 7) throw new IllegalArgumentException("data id 必须是 7 字节");
+        FitId fi = new FitId(id);
+        ByteArrayOutputStream rma = new ByteArrayOutputStream();
+        PB.bytes(rma, 3, id);
+        synchronized (fitLock) { fitBuf = null; fitPayload = null; }
+        log.log("→ 拉取健身数据 " + fi.describe());
+        sendEncrypted(Framing.CH_PB, oyt(8, 4, 10, rma.toByteArray()));
+        byte[] got = null;
+        long end = System.currentTimeMillis() + timeoutMs;
+        synchronized (fitLock) {
+            while (System.currentTimeMillis() < end) {
+                if (fitPayload != null) {
+                    byte[] p = fitPayload;
+                    fitPayload = null;
+                    // 只接受我们请求的那条（手表可能顺便推别的记录）
+                    if (p.length >= 7 && java.util.Arrays.equals(
+                            java.util.Arrays.copyOfRange(p, 0, 7), id)) { got = p; break; }
+                    log.log("（忽略顺手推来的其它记录 " + Crypto.hex(java.util.Arrays.copyOfRange(p, 0, 7)) + "）");
+                    continue;
+                }
+                fitLock.wait(Math.max(1, Math.min(500, end - System.currentTimeMillis())));
+            }
+        }
+        try {
+            ByteArrayOutputStream r2 = new ByteArrayOutputStream();
+            PB.bytes(r2, 3, id);
+            sendEncrypted(Framing.CH_PB, oyt(8, 5, 10, r2.toByteArray()));
+            log.log("→ 已确认(8/5) " + fi.hex());
+        } catch (Exception e) { log.log("⚠ 确认 8/5 失败: " + e); }
+        if (got == null) { log.log("✗ 没收到健身数据（超时 " + timeoutMs + "ms）"); return null; }
+        if (got.length >= 7) {
+            FitId back = new FitId(java.util.Arrays.copyOfRange(got, 0, 7));
+            log.log("✓ 收到 " + got.length + "B，data id = " + back.describe()
+                  + "，body " + (got.length - 7) + "B");
+        }
+        return got;
+    }
+
+    /** 拉数据并落盘到 App 私有目录 files/fitness/，返回文件路径 */
+    public String fitnessFetchToFile(byte[] id, long timeoutMs) throws Exception {
+        byte[] data = fitnessFetch(id, timeoutMs);
+        if (data == null) return null;
+        java.io.File dir = new java.io.File(APP.getFilesDir(), "fitness");
+        dir.mkdirs();
+        String name = new FitId(java.util.Arrays.copyOfRange(id, 0, 7)).hex() + ".bin";
+        java.io.File out = new java.io.File(dir, name);
+        try (java.io.FileOutputStream fo = new java.io.FileOutputStream(out)) { fo.write(data); }
+        log.log("💾 已保存 " + out.getAbsolutePath() + "（" + data.length + "B）");
+        return out.getAbsolutePath();
     }
 
     // ───────── 设备信息 / 电量 / 通用读取 ─────────

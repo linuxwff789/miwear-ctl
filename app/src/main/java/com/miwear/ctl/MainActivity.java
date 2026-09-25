@@ -673,6 +673,12 @@ public class MainActivity extends Activity implements WearLink.Log {
                             link.probeInfo(it.getIntExtra("probe_mod", 0), it.getIntExtra("probe_sub", 0), 8000);
                             return;
                         }
+                        if (it.getBooleanExtra("fit_ids", false)) {
+                            link.fitnessIds(it.getIntExtra("fit_sub", 1));
+                            return;
+                        }
+                        String fid = it.getStringExtra("fit_fetch_id");
+                        if (fid != null) { link.fitnessFetchToFile(hex2(fid), 60000); return; }
                         if (it.getBooleanExtra("query_status", false)) { link.deviceInfoAll(); return; }
                         if (it.getBooleanExtra("find_device", false)) { link.findDevice(); return; }
                         String mp = it.getStringExtra("msg_pkg");

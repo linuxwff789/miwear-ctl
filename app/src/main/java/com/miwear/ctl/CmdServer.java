@@ -351,6 +351,25 @@ public class CmdServer implements WearLink.Log {
                     ensureLink().probeInfo(j.optInt("mod"), j.optInt("sub"), j.optInt("timeout", 8000));
                     return null;
                 }
+                case "fitids": {
+                    List<WearLink.FitId> ids = ensureLink().fitnessIds(j.optInt("sub", 1));
+                    StringBuilder sb = new StringBuilder("[");
+                    for (int i = 0; i < ids.size(); i++) {
+                        if (i > 0) sb.append(',');
+                        sb.append(ids.get(i).toJson());
+                    }
+                    return sb.append(']').toString();
+                }
+                case "fitfetch": {
+                    String hx = j.optString("id", "");
+                    if (hx.isEmpty()) throw new IllegalStateException("缺少 id");
+                    byte[] id = MainActivity.hex2(hx);
+                    String path = ensureLink().fitnessFetchToFile(id, j.optInt("timeout", 60000));
+                    if (path == null) return "null";
+                    File f = new File(path);
+                    return "{\"path\":" + JSONObject.quote(path) + ",\"len\":" + f.length()
+                         + ",\"id\":" + JSONObject.quote(hx) + "}";
+                }
                 case "find": {
                     ensureLink().findDevice();
                     return null;

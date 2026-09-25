@@ -26,6 +26,9 @@
 #   battery                   只读电量/充电状态（module 2 sub 1）
 #   probe <module> <sub>      读任意官方信息接口，输出 protobuf 树
 #                             （如 2/62 存储、8/10 心率、8/8 血氧、8/14 压力、8/12 久坐、17/8 睡眠模式）
+#   fitness [ids|history]     列出手表上的健身/睡眠 data id（直接从手表读，不读手机 App）
+#   fitness fetch <id> [文件]   拉一条 data id 的原始数据（表 → 本机，ch5 传输）
+#   sleep [--save <文件>]      看睡眠：拉今日最新的睡眠记录
 #   find                      找手表：让手表震动/响铃
 #   msg <包名> <文本>          给手表快应用发消息（interconnect）
 #   sync <包名> [状态]         同步手机 App 安装状态
@@ -277,6 +280,90 @@ cmd_probe() {
   need_root; need_app; ensure_key
   if serve_up; then rpc_send "$(okjson cmd=probe mod="$m" sub="$s")" 30 && return 0; fi
   do_action "module $m sub $s" 40 --ei probe_mod "$m" --ei probe_sub "$s"
+}
+
+# ───────── 健身 / 睡眠数据（直接从手表读，module 8 + ch5）─────────
+# 拉一条 data id 的原始数据落盘；回显最终文件路径
+fit_fetch_to() {  # fit_fetch_to <idhex> <outfile>
+  local id=$1 out=$2 json path
+  json=$(rpc_send "$(okjson cmd=fitfetch id="$id")" 180 --raw 2>/dev/null | grep '"ev":"done"' | tail -1)
+  path=$(printf '%s' "$json" | python3 -c '
+import sys,json
+try: d=json.loads(sys.stdin.read() or "{}")
+except Exception: d={}
+v=d.get("data")
+print(v.get("path","") if isinstance(v,dict) else "")
+' 2>/dev/null)
+  [ -n "$path" ] || return 1
+  su -c "cat '$path'" > "$out" 2>/dev/null || return 1
+  return 0
+}
+
+fit_ids_json() {  # fit_ids_json <1|2> → JSON 数组
+  local s=${1:-1}
+  rpc_send "$(okjson cmd=fitids sub=$s)" 60 --raw 2>/dev/null \
+    | grep '"ev":"done"' | tail -1 \
+    | python3 -c '
+import sys,json
+try: d=json.loads(sys.stdin.read() or "{}")
+except Exception: d={}
+print(json.dumps(d.get("data") or [], ensure_ascii=False))
+' 2>/dev/null
+}
+
+cmd_fitness() {
+  local sub=${1:-ids}; shift || true
+  case "$sub" in
+    ids|history)
+      local s=1; [ "$sub" = history ] && s=2
+      serve_up || die "需要常驻服务：miwear serve start"
+      rpc_send "$(okjson cmd=fitids sub=$s)" 60
+      ;;
+    fetch)
+      local id=${1:-}; shift || true
+      [ -n "$id" ] || die "用法: miwear fitness fetch <14位hex id> [输出文件]"
+      [ ${#id} -eq 14 ] || die "data id 必须是 14 位 hex（7 字节）"
+      serve_up || die "需要常驻服务：miwear serve start"
+      local out=${1:-$HOME/miwear-fitness-$(date +%Y%m%d-%H%M%S)-$id.bin}
+      if fit_fetch_to "$id" "$out"; then
+        ok "已保存 $out（$(wc -c < "$out") 字节）"
+        echo "$out"
+      else
+        die "拉取失败（miwear log -n 40 看细节）"
+      fi
+      ;;
+    *) die "用法: miwear fitness [ids|history|fetch <id>]" ;;
+  esac
+}
+
+# 看睡眠：优先今日最新的睡眠类 id（午睡/夜间/全天），否则退而取最新 DailyRecord
+cmd_sleep() {
+  local save=""
+  while [ $# -gt 0 ]; do
+    case "$1" in --save) save=${2:-}; shift 2 ;; *) shift ;; esac
+  done
+  serve_up || die "需要常驻服务：miwear serve start"
+  local json id kind
+  json=$(fit_ids_json 1)
+  [ -n "$json" ] && [ "$json" != "[]" ] || die "没读到健身 data id"
+  read -r id kind < <(printf '%s' "$json" | python3 -c '
+import sys,json
+ids=json.load(sys.stdin)
+sl=[i for i in ids if i.get("sleep")]
+if not sl: sl=[i for i in ids if i.get("dailyType")==0 and i.get("fileType")==0]
+if not sl: sl=ids
+sl.sort(key=lambda x: x["ts"], reverse=True)
+print(sl[0]["id"], sl[0]["type"])
+')
+  [ -n "$id" ] || die "没找到可拉的记录"
+  info "最新睡眠相关记录：$kind  $id"
+  local out=${save:-$HOME/miwear-sleep-$(date +%Y%m%d-%H%M%S)-$id.bin}
+  if fit_fetch_to "$id" "$out"; then
+    ok "已保存 $out（$(wc -c < "$out") 字节）"
+    python3 "$(dirname "$0")/fitness_decode.py" "$out" 2>/dev/null || true
+  else
+    die "拉取失败（miwear log -n 40 看细节）"
+  fi
 }
 
 # 找手表：让手表震动/响铃（module 2 sub 18）
@@ -780,6 +867,8 @@ case "${1:-}" in
   info)      shift; cmd_info "$@" ;;
   battery)   shift; cmd_battery "$@" ;;
   probe)     shift; cmd_probe "$@" ;;
+  fitness)   shift; cmd_fitness "$@" ;;
+  sleep)     shift; cmd_sleep "$@" ;;
   find)      shift; cmd_find "$@" ;;
   msg)       shift; cmd_msg "$@" ;;
   sync)      shift; cmd_sync "$@" ;;
