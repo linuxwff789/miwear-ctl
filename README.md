@@ -162,15 +162,19 @@ miwear sleep --watch [--interval 秒]   # 前台盯：新睡眠段一落盘就�
 miwear alert <标题> <内容>             # 本机弹一条通知（App 自给自足，不需 termux-api）
 ```
 
-### 睡眠监测（后台常驻，入睡/起床弹通知）
+### 睡眠监测（跑在 App 里，入睡/起床弹通知）
 
 ```bash
-miwear sleep --daemon [--interval 秒]   # 开启（默认 60s 一次）；启动后后台跑
+miwear sleep --daemon [--interval 秒]   # 开启（默认 60s 一次）
 miwear sleep --status                   # 看状态（睡/醒 + 入睡、起床、检测时间）
 miwear sleep --log [-n N] [-f]          # 看事件日志（入睡/起床/新段）
 miwear sleep --test-notify              # 试一下通知通道
+miwear sleep --reset                    # 清空状态/日志（消掉误判，状态机回到清醒）
 miwear sleep --stop                     # 关闭
 ```
+
+> 监测**在 App 内常驻**（`SleepMonitor.java` + 前台服务），Termux 只负责开关和看日志；关掉 Termux 也照跑。
+> 也可以在 App 界面直接点「开启监测 / 关闭 / 状态 / 看日志 / 测试通知」。已开启则开机自启。
 
 开启后行为（`tools/sleep_monitor.py`）：
 
