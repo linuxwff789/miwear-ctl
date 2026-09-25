@@ -60,10 +60,10 @@ def id_info(hexid):
     return {"ts": ts, "ver": ver, "daily": daily, "file": t & 3, "id": hexid}
 
 
-def newest_sleep_id():
+def newest_sleep_id(ids=None):
     """最新的睡眠段：dt8/ft1 > dt3 > dt2"""
     best = None
-    for h in pushed_ids():
+    for h in (ids if ids is not None else pushed_ids()):
         i = id_info(h)
         if not i:
             continue
@@ -122,6 +122,26 @@ def logline(logpath, msg):
     print(line, flush=True)
 
 
+def sleep_records(limit=4):
+    """最近的几条睡眠段（已解析）：[(ts, id, res), ...] 按时间倒序"""
+    ids = pushed_ids()
+    cand = []
+    for h in ids:
+        i = id_info(h)
+        if not i:
+            continue
+        sc = 3 if (i["daily"] == 8 and i["file"] == 1) else (2 if i["daily"] in (2, 3) else 0)
+        if sc:
+            cand.append((sc, i["ts"], h))
+    cand.sort(reverse=True)
+    out = []
+    for _sc, ts, h in cand[:limit]:
+        r = read_record(h)
+        if r and r.get("sleep"):
+            out.append((ts, h, r))
+    return out
+
+
 def main():
     ap = sys.argv[1:]
     interval = 60
@@ -151,41 +171,41 @@ def main():
     miss = 0
     while True:
         try:
-            rid = newest_sleep_id()
-            rec = read_record(rid) if rid else None
-            if rec and rec.get("sleep"):
+            recs = sleep_records()
+            if recs:
+                # 以「最新那一段」为准：未结束=在睡；已结束=醒着
+                ts, rid, rec = recs[0]
                 s = rec["sleep"]
-                bed, wake, fin = s.get("bedTime"), s.get("wakeupTime"), s.get("isSleepFinish")
-                if not fin and st["state"] != "asleep":
-                    # 入睡
+                fin = s.get("isSleepFinish")
+                if (not fin) and st["state"] != "asleep":
                     now = time.time()
-                    st.update(state="asleep", lastId=rid, bedTime=bed, detectedAt=now)
+                    st.update(state="asleep", lastId=rid, bedTime=s.get("bedTime"), detectedAt=now)
                     save_state(state_path, st)
                     msg = ("入睡时间 %s（表记录）\n检测到 %s\n记录 id %s"
-                           % (tstr(bed), tstr(now), rid))
+                           % (tstr(s.get("bedTime")), tstr(now), rid))
                     logline(log_path, "😴 入睡  bedTime=%s  detected=%s  id=%s"
-                            % (tstr(bed), tstr(now), rid))
+                            % (tstr(s.get("bedTime")), tstr(now), rid))
                     notify("😴 已入睡", msg)
                 elif fin and st["state"] == "asleep":
-                    # 起床
                     now = time.time()
-                    dur = (wake - st.get("bedTime", bed)) / 3600.0 if wake else 0
-                    st.update(state="awake", lastId=rid, wakeupTime=wake, detectedAt=now)
+                    bed = st.get("bedTime") or s.get("bedTime") or 0
+                    dur = (s.get("wakeupTime", 0) - bed) / 3600.0 if s.get("wakeupTime") else 0
+                    st.update(state="awake", lastId=rid, wakeupTime=s.get("wakeupTime"),
+                              detectedAt=now)
                     save_state(state_path, st)
                     msg = ("起床时间 %s\n睡了 %.1f 小时\n检测到 %s\n记录 id %s"
-                           % (tstr(wake), dur, tstr(now), rid))
+                           % (tstr(s.get("wakeupTime")), dur, tstr(now), rid))
                     logline(log_path, "☀️ 起床  wakeup=%s  slept=%.1fh  detected=%s  id=%s"
-                            % (tstr(wake), dur, tstr(now), rid))
+                            % (tstr(s.get("wakeupTime")), dur, tstr(now), rid))
                     notify("☀️ 已起床", msg)
                 elif st.get("lastId") != rid:
                     st["lastId"] = rid
                     save_state(state_path, st)
                     logline(log_path, "· 新睡眠段 id=%s  isSleepFinish=%s  bed=%s wake=%s"
-                            % (rid, fin, tstr(bed), tstr(wake)))
+                            % (rid, fin, tstr(s.get("bedTime")), tstr(s.get("wakeupTime"))))
                 miss = 0
             else:
                 miss += 1
-                # 兜底：长时间没有推送 → 主动问一次手表（也会促使它把积压推过来）
                 if miss % 5 == 1:
                     miwear("fitness", "ids", timeout=60)
         except Exception as e:

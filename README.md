@@ -158,8 +158,46 @@ miwear fitness pushed                 # 手表已推送并落盘的记录
 miwear fitness fetch <14位hex id> [文件] [--confirm]
                                       # 拉一条记录的原始数据（ch5 分片、组装、CRC32 校验）
 miwear sleep [--save <文件>] [--json]  # 看睡眠：给结论（现在清醒 / 正在睡觉）
-miwear sleep --watch [--interval 秒]   # 常驻盯：手表一推新的睡眠段就解码并报结论
+miwear sleep --watch [--interval 秒]   # 前台盯：新睡眠段一落盘就解码并报结论
+miwear alert <标题> <内容>             # 本机弹一条通知（App 自给自足，不需 termux-api）
 ```
+
+### 睡眠监测（后台常驻，入睡/起床弹通知）
+
+```bash
+miwear sleep --daemon [--interval 秒]   # 开启（默认 60s 一次）；启动后后台跑
+miwear sleep --status                   # 看状态（睡/醒 + 入睡、起床、检测时间）
+miwear sleep --log [-n N] [-f]          # 看事件日志（入睡/起床/新段）
+miwear sleep --test-notify              # 试一下通知通道
+miwear sleep --stop                     # 关闭
+```
+
+开启后行为（`tools/sleep_monitor.py`）：
+
+1. 每 `interval` 秒看一遍 App 已落盘的睡眠段（`files/fitness/*.bin`），以**最新那一段**为准：
+   - `isSleepFinish = 0` ⇒ 正在睡；
+   - `isSleepFinish = 1` ⇒ 已醒。
+2. **状态机 awake ↔ asleep**（持久化在 `~/.miwear-sleep/state.json`，重启不会重复报）：
+
+```
+[2026-09-25 23:59:41] 😴 入睡  bedTime=09-25 23:54:09  detected=09-25 23:59:41  id=2199b66a200421
+[2026-09-26 00:21:35] ☀️ 起床  wakeup=09-26 00:21:35  slept=5.5h  detected=09-26 00:21:48  id=...
+```
+
+3. 同时弹本机通知（**由 App 自己发**，channel `miwear-alert`、IMPORTANCE_HIGH ⇢ 有横幅+声+震动；
+   不依赖 `termux-api`）：
+
+```
+😴 已入睡
+入睡时间 09-25 23:54:09（表记录）
+检测到   09-25 23:59:41
+记录 id  2199b66a200421
+```
+
+> 「入睡时间」= 手表算法给的上床时刻；「检测到」= 本机轮询发现的时刻（两者会差一个轮询周期）。
+> 日志在 `~/.miwear-sleep/sleep.log`。
+> ⚠️ Termux 后台进程可能被系统回收 → 建议 `termux-wake-lock`（需 termux-api）或把监测跑在 `tmux` 里。
+
 
 实测（REDMI Watch 5，2026-09-25）：
 
