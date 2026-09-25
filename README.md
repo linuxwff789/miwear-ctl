@@ -154,9 +154,11 @@ miwear log [-n 行数] [-f]             # 看日志
 ```bash
 miwear fitness ids                    # 今日待同步 data id（含类型/时间/版本解码）
 miwear fitness history                # 历史 data id
+miwear fitness pushed                 # 手表已推送并落盘的记录
 miwear fitness fetch <14位hex id> [文件] [--confirm]
                                       # 拉一条记录的原始数据（ch5 分片、组装、CRC32 校验）
-miwear sleep [--save <文件>] [--json]  # 看睡眠：拉今日最新睡眠段并给结论（现在清醒 / 正在睡觉）
+miwear sleep [--save <文件>] [--json]  # 看睡眠：给结论（现在清醒 / 正在睡觉）
+miwear sleep --watch [--interval 秒]   # 常驻盯：手表一推新的睡眠段就解码并报结论
 ```
 
 实测（REDMI Watch 5，2026-09-25）：
@@ -174,8 +176,16 @@ data id: 706fb56a200421    时间: 09-25 02:44:00  ver=4
 结论 : 现在清醒（这段睡眠已结束：09-25 02:44 → 09-25 08:12，共 5.5 小时）
 ```
 
-> ⚠️ **拉完默认不发 `8/5` 确认**：确认后设备会删掉这条记录（官方注释：不完整的睡眠段同步到 App 后
-> 设备端删除），同一条 id 就再也取不到了。轮询场景必须只读；确实要告知手表“已消费”才加 `--confirm`。
+> ⚠️ **拉完默认不发 `8/5` 确认**：确认为的是告诉手表“已消费”；实测**只要数据被成功取走（不管是 8/4 应答还是手表主动推），
+> 该 id 就会从 `8/1` 的待同步列表里消失**，同一条记录取不到第二次。所以轮询要靠“新 id 出现 / 新推送文件”。
+
+手表会在**连接后主动推送积压记录**（实测一次推了 11 条，含 31KB 的 AllDaySleep），不只在应答 8/4 时推；
+App 会把每条收齐的记录落盘到 `files/fitness/<id>.bin` 并打 `📥` 日志，于是：
+
+```bash
+miwear fitness pushed                  # 列出手表已推送并落盘的记录
+miwear sleep --watch --interval 120    # 常驻盯睡眠：新睡眠段一落盘就解码并给结论
+```
 
 记录二进制格式（逆向自 `com.xiaomi.fit.fitness` + 官方 `assets/schemas.zip`）：
 
