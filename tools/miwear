@@ -445,49 +445,71 @@ SLEEPD_DIR=${MIWEAR_SLEEP_DIR:-$HOME/.miwear-sleep}
 SLEEPD_PID=$SLEEPD_DIR/sleepd.pid
 SLEEPD_LOG=$SLEEPD_DIR/sleepd.log
 
-sleepd_alive() { [ -f "$SLEEPD_PID" ] && kill -0 "$(cat "$SLEEPD_PID")" 2>/dev/null; }
+# 睡眠监测现在跑在 App 里（不依赖 Termux）；下面这几个只转发到 CmdServer 的 sleepmon 命令
+sleepmon_rpc() { rpc_send "$(okjson cmd=sleepmon action="$1" ${2:+interval="$2"})" 30 --raw 2>/dev/null | grep '"ev":"done"' | tail -1; }
+
+sleepd_alive() {  # 统一叫法：App 里的监测在跑
+  local j; j=$(sleepmon_rpc status)
+  printf '%s' "$j" | grep -q '"running":true'
+}
 
 sleepd_start() {  # sleepd_start <interval秒>
   local interval=${1:-60}
-  serve_up || die "需要常驻服务（通知由 App 发）：miwear serve start"
-  if sleepd_alive; then info "睡眠监测已在运行（pid $(cat "$SLEEPD_PID")）"; return 0; fi
-  mkdir -p "$SLEEPD_DIR"
-  local py; py=$(command -v python3)
-  nohup "$py" "$(dirname "$0")/sleep_monitor.py" --interval "$interval" --state "$SLEEPD_DIR" \
-      >>"$SLEEPD_LOG" 2>&1 &
-  echo $! > "$SLEEPD_PID"
-  sleep 2
+  serve_up || die "需要常驻服务：miwear serve start（App 的后台服务负责连接手表）"
+  local j; j=$(sleepmon_rpc start "$interval")
+  sleep 1
   if sleepd_alive; then
-    ok "睡眠监测已开启（pid $(cat "$SLEEPD_PID")，每 ${interval}s 一次）"
-    info "入睡/起床时会弹本机通知；日志：miwear sleep --log"
-    info "Termux 建议 termux-wake-lock（或跑在 tmux 里）以免被系统回收"
+    ok "睡眠监测已在 App 内开启（每 ${interval}s 一次）"
+    info "入睡/起床时 App 会弹本机通知；日志：miwear sleep --log"
+    info "可在 App 界面的「开启监测」按钮同开关；已开启则开机自启"
   else
-    die "启动失败，看 $SLEEPD_LOG"
+    warn "已下发开启命令，但没看到运行标志（miwear log -n 30 看看）"
   fi
 }
 
 sleepd_stop() {
-  if sleepd_alive; then kill "$(cat "$SLEEPD_PID")" 2>/dev/null; sleep 1; fi
-  rm -f "$SLEEPD_PID"
-  ok "已关闭睡眠监测"
+  serve_up || true
+  sleepmon_rpc stop >/dev/null 2>&1
+  ok "已关闭睡眠监测（App 内）"
 }
 
 sleepd_status() {
-  if sleepd_alive; then ok "睡眠监测：运行中（pid $(cat "$SLEEPD_PID")）"
-  else warn "睡眠监测：未运行（miwear sleep --daemon 开启）"; fi
-  local st=$SLEEPD_DIR/state.json
-  if [ -f "$st" ]; then
-    python3 - "$st" <<'PY'
-import json,sys,time
-d=json.load(open(sys.argv[1]))
+  serve_up || { warn "常驻服务未运行：miwear serve start"; return 1; }
+  local j; j=$(sleepmon_rpc status)
+  python3 -c '
+import sys,json,time
+raw=sys.stdin.read().strip()
+try: d=json.loads(raw).get("data") or {}
+except Exception: d={}
+if isinstance(d,str):
+    try: d=json.loads(d)
+    except Exception: d={}
+print("  运行中: " + ("✓" if d.get("running") else "✗（miwear sleep --daemon 开启）"))
 print("  当前状态: " + ("😴 睡眠中" if d.get("state")=="asleep" else "清醒"))
+print("  轮询间隔: %ss" % d.get("interval", "?"))
 for k,label in (("bedTime","入睡时间"),("wakeupTime","起床时间"),("detectedAt","最近检测时间")):
-    if d.get(k): print("  %s: %s" % (label, time.strftime("%m-%d %H:%M:%S", time.localtime(d[k]))))
+    v=d.get(k) or 0
+    if v: print("  %s: %s" % (label, time.strftime("%m-%d %H:%M:%S", time.localtime(v))))
 if d.get("lastId"): print("  最近记录: " + d["lastId"])
-PY
+' <<< "$j"
+  # 兼容旧版 Termux 守护（若还在跑）
+  if [ -f "$SLEEPD_PID" ] && kill -0 "$(cat "$SLEEPD_PID")" 2>/dev/null; then
+    warn "（另：旧版 Termux 守护还在跑 pid $(cat "$SLEEPD_PID")，建议 miwear sleep --stop-legacy）"
   fi
-  [ -f "$SLEEPD_DIR/sleep.log" ] && { echo "  最近事件:"; tail -3 "$SLEEPD_DIR/sleep.log" | sed 's/^/    /'; }
+  echo "  最近事件:"
+  sleep_log_tail 4 | sed 's/^/    /'
   return 0
+}
+
+sleep_log_tail() {  # sleep_log_tail <N>：优先 App 内日志，其次旧文件
+  local n=${1:-30} out
+  out=$(rpc_send '{"cmd":"sleeplog"}' 30 --raw 2>/dev/null | grep '"ev":"done"' | tail -1 \
+        | python3 -c 'import sys,json
+try: d=json.loads(sys.stdin.read() or "{}")
+except Exception: d={}
+print(d.get("data") or "")' 2>/dev/null)
+  if [ -n "$out" ]; then printf '%s\n' "$out" | head -"$n"; return; fi
+  [ -f "$SLEEPD_DIR/sleep.log" ] && tail -n "$n" "$SLEEPD_DIR/sleep.log"
 }
 
 # 看睡眠：拉今日最新睡眠段（AllDaySleep）+ 最新打点，判断「现在是否在睡」
@@ -514,14 +536,18 @@ cmd_sleep() {
   done
   if [ $testnotify -eq 1 ]; then
     serve_up || die "需要常驻服务：miwear serve start"
-    python3 "$(dirname "$0")/sleep_monitor.py" --test-notify
+    rpc_send '{"cmd":"sleepmon","action":"test"}' 20 >/dev/null || die "发送失败"
+    ok "已发测试通知"
     return 0
   fi
   if [ $stop -eq 1 ]; then sleepd_stop; return 0; fi
   if [ $status -eq 1 ]; then sleepd_status; return 0; fi
   if [ $dolog -eq 1 ]; then
-    [ -f "$SLEEPD_DIR/sleep.log" ] || die "还没有日志（miwear sleep --daemon）"
-    if [ $follow -eq 1 ]; then tail -n "$tailn" -f "$SLEEPD_DIR/sleep.log"; else tail -n "$tailn" "$SLEEPD_DIR/sleep.log"; fi
+    if [ $follow -eq 1 ]; then
+      while true; do sleep_log_tail "$tailn"; sleep 5; done
+    else
+      sleep_log_tail "$tailn"
+    fi
     return 0
   fi
   if [ $daemon -eq 1 ]; then sleepd_start "$interval"; return 0; fi

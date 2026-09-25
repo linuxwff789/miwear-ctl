@@ -22,6 +22,7 @@ import android.os.IBinder;
 public class GatewayService extends Service {
 
     public static final String CHANNEL = "miwear-gateway";
+    public static final String ALERT_CHANNEL = "miwear-alert";
     public static final int NOTIFY_ID = 4321;
 
     @Override public void onCreate() {
@@ -33,16 +34,52 @@ public class GatewayService extends Service {
                 nm.createNotificationChannel(new NotificationChannel(
                         CHANNEL, "miwear 后台服务", NotificationManager.IMPORTANCE_MIN));
             }
+            if (nm != null && nm.getNotificationChannel(ALERT_CHANNEL) == null) {
+                NotificationChannel ac = new NotificationChannel(
+                        ALERT_CHANNEL, "miwear 提醒", NotificationManager.IMPORTANCE_HIGH);
+                ac.enableVibration(true);
+                nm.createNotificationChannel(ac);
+            }
         }
+        autoStartMonitors();
+    }
+
+    /** 进程起来后（含开机/被杀重启）按已保存的开关自动恢复睡眠监测 */
+    private void autoStartMonitors() {
+        try {
+            WearLink.APP = getApplicationContext();
+            if (!SleepMonitor.enabled(this)) return;
+            // 睡眠监测需要一条常驻手表连接（ch5 记录靠它收）——没服务就拉一个
+            if (!CmdServer.isRunning()) {
+                String mac = CmdServer.savedMacAny(this), key = CmdServer.savedKeyAny(this);
+                if (!mac.isEmpty() && !key.isEmpty()) {
+                    CmdServer.start(this, mac, key, CmdServer.savedPort(this));
+                }
+            }
+            if (!SleepMonitor.isRunning()) {
+                SleepMonitor.start(this, SleepMonitor.savedInterval(this));
+            }
+        } catch (Throwable ignored) {}
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         boolean stop = intent != null && intent.getBooleanExtra("serve_stop", false);
         if (stop) {
+            SleepMonitor.stop(this);
             CmdServer.stop();
             try { stopForeground(true); } catch (Exception ignored) {}
             stopSelf();
             return START_NOT_STICKY;
+        }
+        // 睡眠监测（可与 CLI 服务独立运行）
+        if (intent != null && intent.hasExtra("sleep_monitor")) {
+            if (intent.getBooleanExtra("sleep_monitor", false)) {
+                SleepMonitor.start(this, intent.getIntExtra("sleep_interval", 60));
+            } else {
+                SleepMonitor.stop(this);
+            }
+        } else {
+            autoStartMonitors();
         }
 
         // 进程被杀后 START_STICKY 重启会是 null intent → 从 SharedPreferences 恢复
@@ -74,10 +111,15 @@ public class GatewayService extends Service {
 
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
+        boolean sm = SleepMonitor.isRunning();
+        String title = serve ? "miwear CLI 服务运行中"
+                      : (sm ? "miwear 睡眠监测中" : "miwear 网关运行中");
+        String text = serve ? ("127.0.0.1:" + CmdServer.runningPort() + " · 认证已常驻"
+                              + (sm ? " · 睡眠监测开" : ""))
+                : (sm ? "入睡 / 起床会弹通知（后台常驻）" : "手表的网络请求正通过手机转发");
         Notification n = b.setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-                .setContentTitle(serve ? "miwear CLI 服务运行中" : "miwear 网关运行中")
-                .setContentText(serve ? "127.0.0.1:" + CmdServer.runningPort() + " · 认证已常驻"
-                                      : "手表的网络请求正通过手机转发")
+                .setContentTitle(title)
+                .setContentText(text)
                 .setOngoing(true)
                 .setShowWhen(false)
                 .build();

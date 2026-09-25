@@ -151,6 +151,24 @@ public class MainActivity extends Activity implements WearLink.Log {
         row5.addView(bProbe); row5.addView(bBind); row5.addView(bReset); row5.addView(bRebind);
         root.addView(row5);
 
+        // ───────── 睡眠监测 ─────────
+        root.addView(label("睡眠监测（常驻，入睡/起床弹通知；不依赖 Termux）"));
+        LinearLayout rowS = new LinearLayout(this);
+        Button bSleepOn = new Button(this);  bSleepOn.setText("开启监测");
+        Button bSleepOff = new Button(this); bSleepOff.setText("关闭");
+        Button bSleepSt = new Button(this);  bSleepSt.setText("状态");
+        Button bSleepLog = new Button(this); bSleepLog.setText("看日志");
+        Button bSleepTest = new Button(this);bSleepTest.setText("测试通知");
+        final android.widget.EditText etSleepIv = new android.widget.EditText(this);
+        etSleepIv.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        etSleepIv.setText("60");
+        etSleepIv.setHint("间隔秒");
+        LinearLayout.LayoutParams lpIv = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        rowS.addView(bSleepOn); rowS.addView(bSleepOff); rowS.addView(bSleepSt);
+        rowS.addView(bSleepLog); rowS.addView(bSleepTest); rowS.addView(etSleepIv, lpIv);
+        root.addView(rowS);
+
         // ───────── 日志 ─────────
         root.addView(label("日志"));
         tvLog = new TextView(this);
@@ -182,6 +200,28 @@ public class MainActivity extends Activity implements WearLink.Log {
         }));
         bClose.setOnClickListener(v -> { if (link != null) link.close(); });
         bSave.setOnClickListener(v -> { savePrefs(); log("已保存 MAC/KEY 到本机配置"); });
+
+        // ───────── 睡眠监测按钮 ─────────
+        bSleepOn.setOnClickListener(v -> {
+            int iv = 60;
+            try { iv = Integer.parseInt(etSleepIv.getText().toString().trim()); } catch (Exception ignored) {}
+            if (iv < 10) iv = 10;
+            SleepMonitor.start(this, iv);
+            ensureServiceStarted("睡眠监测");
+            log("✅ 睡眠监测已开启（每 " + iv + "s 一次）；入睡/起床会弹通知");
+        });
+        bSleepOff.setOnClickListener(v -> { SleepMonitor.stop(this); log("🛑 睡眠监测已关闭"); });
+        bSleepSt.setOnClickListener(v -> log("睡眠监测: " + (SleepMonitor.isRunning() ? "运行中" : "未运行")
+                + "  " + SleepMonitor.statusJson(this)));
+        bSleepLog.setOnClickListener(v -> {
+            String l = SleepMonitor.savedLog(this);
+            log("── 睡眠监测日志 ──\n" + (l == null || l.isEmpty() ? "（暂无）" : l));
+        });
+        bSleepTest.setOnClickListener(v -> bg(() -> {
+            SleepMonitor.notify(this, "😴 睡眠监测测试",
+                    "如果你看到这条通知，说明提醒通道通了。\n时间 " + new java.util.Date());
+            log("已发测试通知");
+        }));
         bReadKey.setOnClickListener(v -> bg(() -> {
             try { readOfficialKey(); } catch (Exception e) { log("❌ 读官方 key 失败: " + e); }
         }));
@@ -538,6 +578,21 @@ public class MainActivity extends Activity implements WearLink.Log {
 
     // ───────────────────────── 配置持久化 ─────────────────────────
 
+    /** 确保前台服务已启动（睡眠监测需要它常驻，才能持续收 ch5 记录） */
+    private void ensureServiceStarted(String tag) {
+        try {
+            android.content.Intent si = new android.content.Intent(this, GatewayService.class)
+                    .putExtra("serve", true)
+                    .putExtra("port", CmdServer.savedPort(this))
+                    .putExtra("mac", etMac.getText().toString().trim())
+                    .putExtra("key", etKey.getText().toString().trim())
+                    .putExtra("sleep_monitor", true)
+                    .putExtra("sleep_interval", SleepMonitor.savedInterval(this));
+            if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(si); else startService(si);
+            log("（已拉前台服务，保证 " + tag + " 不被冻结）");
+        } catch (Exception e) { log("❌ 启动前台服务失败: " + e); }
+    }
+
     private SharedPreferences prefs() { return getSharedPreferences(PREF, MODE_PRIVATE); }
 
     private void loadPrefs() {
@@ -600,6 +655,31 @@ public class MainActivity extends Activity implements WearLink.Log {
             } catch (Exception e) { log("❌ 启动 CLI 服务失败: " + e); }
             return;
         }
+        // ── 睡眠监测（App 内常驻，不依赖 Termux）──
+        if (it.hasExtra("sleep_monitor")) {
+            int iv = it.getIntExtra("sleep_interval", 60);
+            if (it.getBooleanExtra("sleep_monitor", false)) {
+                SleepMonitor.start(this, iv);
+                ensureServiceStarted("睡眠监测");
+                log("✅ 睡眠监测已开启（每 " + iv + "s）");
+            } else {
+                SleepMonitor.stop(this);
+                log("🛑 睡眠监测已关闭");
+            }
+            return;
+        }
+        if (it.getBooleanExtra("sleep_test", false)) {
+            SleepMonitor.notify(this, "😴 睡眠监测测试",
+                    "如果你看到这条通知，说明提醒通道通了。\n时间 " + new java.util.Date());
+            log("已发测试通知");
+            return;
+        }
+        if (it.getBooleanExtra("sleep_status", false)) {
+            log("睡眠监测: " + (SleepMonitor.isRunning() ? "运行中" : "未运行") + "\n" + SleepMonitor.statusJson(this)
+                + "\n── 日志 ──\n" + SleepMonitor.savedLog(this));
+            return;
+        }
+
         if (it.getBooleanExtra("autoconnect", false)) {
             final String mm = etMac.getText().toString().trim();
             final String kk = etKey.getText().toString().trim();

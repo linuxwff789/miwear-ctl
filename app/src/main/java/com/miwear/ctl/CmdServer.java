@@ -92,6 +92,20 @@ public class CmdServer implements WearLink.Log {
         return ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).getString("key", "");
     }
 
+    public static String savedMacAny(Context ctx) {
+        String m = savedMac(ctx);
+        if (m == null || m.isEmpty())
+            m = ctx.getSharedPreferences("miwear-ui", Context.MODE_PRIVATE).getString("mac", "");
+        return m == null ? "" : m;
+    }
+
+    public static String savedKeyAny(Context ctx) {
+        String k = savedKey(ctx);
+        if (k == null || k.isEmpty())
+            k = ctx.getSharedPreferences("miwear-ui", Context.MODE_PRIVATE).getString("key", "");
+        return k == null ? "" : k;
+    }
+
     public static synchronized void stop() {
         CmdServer s = INSTANCE;
         if (s == null) return;
@@ -245,6 +259,10 @@ public class CmdServer implements WearLink.Log {
             c.write("{\"ev\":\"done\",\"ok\":true,\"data\":" + JSONObject.quote(readLog()) + "}\n");
             return true;
         }
+        if ("sleeplog".equals(cmd)) {
+            c.write("{\"ev\":\"done\",\"ok\":true,\"data\":" + JSONObject.quote(sleepLog(ctx)) + "}\n");
+            return true;
+        }
         if ("reconnect".equals(cmd)) { closeLink(); }
 
         boolean keep = j.optBoolean("keep", false);
@@ -253,6 +271,34 @@ public class CmdServer implements WearLink.Log {
         t.start();
         return true;
     }
+
+    /** 供睡眠监测兜底调用：问一次 8/1（顺带促使手表把积压记录推下来）。
+     *  走 CmdServer 的锁，避免和 CLI 命令交叉使用同一条蓝牙连接。 */
+    public static void pokeFitnessIds() {
+        CmdServer s = INSTANCE;
+        if (s == null) return;
+        synchronized (s.lock) {
+            try {
+                WearLink l = s.link;
+                if (l != null && l.isConnected()) l.request(new byte[]{ 0x08, 0x08, 0x10, 0x01 }, 8000);
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    /** 向所有已连接客户端广播一条日志（供常驻服务把 App 内部日志实时传给 CLI） */
+    public static void sendLog(String line) {
+        CmdServer s = INSTANCE;
+        if (s == null) return;
+        try {
+            org.json.JSONObject o = new org.json.JSONObject();
+            o.put("ev", "log");
+            o.put("msg", line);
+            s.broadcast(o.toString() + "\n");
+        } catch (Exception ignored) {}
+    }
+
+    /** 读 App 内睡眠监测的内存日志 */
+    public String sleepLog(Context c) { return SleepMonitor.savedLog(c); }
 
     /** 从 App 自己发一条高优先级通知（有横幅 + 提示音），供 Termux 侧做提醒 */
     public void postAlert(String title, String text, int id) {
@@ -400,9 +446,26 @@ public class CmdServer implements WearLink.Log {
                          + ",\"id\":" + JSONObject.quote(hx) + "}";
                 }
                 case "alert": {
-                    postAlert(j.optString("title", "miwear"),
-                              j.optString("text", ""),
-                              j.optInt("id", 7788));
+                    SleepMonitor.notify(ctx, j.optString("title", "miwear"),
+                                        j.optString("text", ""));
+                    log("🔔 本机通知: " + j.optString("title") + " / " + j.optString("text"));
+                    return null;
+                }
+                case "sleepmon": {
+                    String act = j.optString("action", "status");
+                    if ("start".equals(act)) {
+                        SleepMonitor.start(ctx, j.optInt("interval", 60));
+                    } else if ("stop".equals(act)) {
+                        SleepMonitor.stop(ctx);
+                    } else if ("log".equals(act)) {
+                        return JSONObject.quote(sleepLog(ctx));
+                    } else if ("test".equals(act)) {
+                        SleepMonitor.notify(ctx, "😴 睡眠监测测试",
+                                "如果你看到这条通知，说明提醒通道通了。\n时间 " + new java.util.Date());
+                        return null;
+                    } else {
+                        return SleepMonitor.statusJson(ctx);
+                    }
                     return null;
                 }
                 case "find": {

@@ -1048,6 +1048,7 @@ public class WearLink {
                             }
                         }
                     } catch (Exception e) { log.log("⚠ 保存健身记录失败: " + e); }
+                    SleepMonitor.kick();   // 睡眠监测：立刻判定，不用等下一个轮询
                 }
                 log.log("← ch5 健身数据收齐: " + all.length + "B → 载荷 " + n + "B" + note);
                 fitLock.notifyAll();

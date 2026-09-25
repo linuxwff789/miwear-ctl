@@ -26,6 +26,7 @@ public class BootReceiver extends BroadcastReceiver {
         if (a == null) return;
 
         if ("com.termux.miwear.STOP".equals(a)) {
+            SleepMonitor.stop(app);
             CmdServer.stop();
             try { app.stopService(new Intent(app, GatewayService.class)); } catch (Exception ignored) {}
             return;
@@ -35,18 +36,27 @@ public class BootReceiver extends BroadcastReceiver {
                 || "android.intent.action.QUICKBOOT_POWERON".equals(a)
                 || Intent.ACTION_MY_PACKAGE_REPLACED.equals(a);
         if (!explicitStart && !boot) return;
-        // 开机自启只在用户显式开过服务时才做，不擅自常驻
-        if (boot && !CmdServer.wasServing(app)) return;
+        // 开机自启只在用户显式开过服务 / 睡眠监测时才做，不擅自常驻
+        boolean sleepWanted = SleepMonitor.enabled(app);
+        if (boot && !CmdServer.wasServing(app) && !sleepWanted) return;
 
         WearLink.APP = app;
+        boolean serve = CmdServer.wasServing(app) || explicitStart;
         Intent si = new Intent(app, GatewayService.class)
-                .putExtra("serve", true)
+                .putExtra("serve", serve)
                 .putExtra("port", CmdServer.savedPort(app))
                 .putExtra("mac", explicitStart && it.getStringExtra("mac") != null
-                        ? it.getStringExtra("mac") : CmdServer.savedMac(app))
+                        ? it.getStringExtra("mac") : CmdServer.savedMacAny(app))
                 .putExtra("key", explicitStart && it.getStringExtra("key") != null
-                        ? it.getStringExtra("key") : CmdServer.savedKey(app))
+                        ? it.getStringExtra("key") : CmdServer.savedKeyAny(app))
                 .putExtra("quiet", it.getBooleanExtra("quiet", false));
+        if (sleepWanted) {
+            si.putExtra("sleep_monitor", true)
+              .putExtra("sleep_interval", SleepMonitor.savedInterval(app))
+              .putExtra("serve", true)
+              .putExtra("mac", CmdServer.savedMacAny(app))
+              .putExtra("key", CmdServer.savedKeyAny(app));
+        }
         try {
             if (Build.VERSION.SDK_INT >= 26) app.startForegroundService(si); else app.startService(si);
         } catch (Exception ignored) {}
