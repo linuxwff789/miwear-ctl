@@ -201,6 +201,30 @@ def parse_all_day_sleep(res, data_valid, body):
     res["series"] = series
 
 
+def decode_bytes(data):
+    """解析一整条记录（<7B id><00><dataValid N><body>）→ dict"""
+    if len(data) < 9:
+        return None
+    i = decode_id(data[:7])
+    res = {"len": len(data), "id": i, "idHex": data[:7].hex(), "type": id_name(i)}
+    n = valid_len(i)
+    ds = 7 + 1
+    if n > 0 and len(data) >= ds + n:
+        data_valid, body = data[ds:ds + n], data[ds + n:]
+    else:
+        data_valid, body = b"", data[ds:]
+    res["dataValidLen"] = n
+    res["dataValid"] = data_valid.hex()
+    try:
+        if i["data_type"] == 0 and i["daily_type"] == 0 and i["file_type"] == 0:
+            parse_daily_record(res, data_valid, body)
+        elif i["data_type"] == 0 and i["daily_type"] == 8 and i["file_type"] == 1:
+            parse_all_day_sleep(res, data_valid, body)
+    except Exception as e:
+        res["parseError"] = repr(e)
+    return res
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -216,26 +240,15 @@ def main():
     if len(data) < 9:
         print("文件太短: %d 字节" % len(data))
         return 1
-    i = decode_id(data[:7])
-    res = {"file": path, "len": len(data), "id": i, "idHex": data[:7].hex(),
-           "type": id_name(i)}
-    n = valid_len(i)
-    ds = 7 + 1
-    if n > 0 and len(data) >= ds + n:
-        data_valid = data[ds:ds + n]
-        body = data[ds + n:]
-    else:
-        data_valid, body = b"", data[ds:]
-    res["dataValidLen"] = n
-    res["dataValid"] = data_valid.hex()
-
-    try:
-        if i["data_type"] == 0 and i["daily_type"] == 0 and i["file_type"] == 0:
-            parse_daily_record(res, data_valid, body)
-        elif i["data_type"] == 0 and i["daily_type"] == 8 and i["file_type"] == 1:
-            parse_all_day_sleep(res, data_valid, body)
-    except Exception as e:
-        res["parseError"] = repr(e)
+    res = decode_bytes(data)
+    if res is None:
+        print("文件太短: %d 字节" % len(data))
+        return 1
+    i = res["id"]
+    data_valid = bytes.fromhex(res["dataValid"])
+    n = res["dataValidLen"]
+    body = data[7 + 1 + max(0, n):] if n > 0 else data[8:]
+    res["file"] = path
 
     body_left = len(body)
 

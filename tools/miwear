@@ -29,6 +29,9 @@
 #   fitness [ids|history|pushed]  列今日 data id / 历史 id / 手表已推送并落盘的记录
 #   fitness fetch <id> [文件]   拉一条 data id 的原始数据（表 → 本机，ch5 传输；默认只读不确认）
 #   sleep [--save <文件>] [--json] [--watch [--interval 秒]]  看睡眠：判断「现在是否在睡」（--watch 常驻盯变化）
+#   sleep --daemon [--interval 秒]    开启睡眠监测（后台常驻，入睡/起床弹通知 + 记日志）
+#   sleep --stop | --status | --log [-f] | --test-notify
+#   alert <标题> <内容>               本机弹一条通知（App 自己发，有横幅+声音）
 #   find                      找手表：让手表震动/响铃
 #   msg <包名> <文本>          给手表快应用发消息（interconnect）
 #   sync <包名> [状态]         同步手机 App 安装状态
@@ -429,19 +432,99 @@ cmd_fitness() {
   esac
 }
 
+# 本机通知（由 App 发，免 termux-api 依赖）
+cmd_alert() {
+  local title=${1:-miwear}; local text=${2:-}
+  [ -n "$text" ] || text="（无内容）"
+  serve_up || die "需要常驻服务：miwear serve start"
+  rpc_send "$(okjson cmd=alert title="$title" text="$text")" 20 >/dev/null || die "发送失败"
+  ok "已发本机通知：$title"
+}
+
+SLEEPD_DIR=${MIWEAR_SLEEP_DIR:-$HOME/.miwear-sleep}
+SLEEPD_PID=$SLEEPD_DIR/sleepd.pid
+SLEEPD_LOG=$SLEEPD_DIR/sleepd.log
+
+sleepd_alive() { [ -f "$SLEEPD_PID" ] && kill -0 "$(cat "$SLEEPD_PID")" 2>/dev/null; }
+
+sleepd_start() {  # sleepd_start <interval秒>
+  local interval=${1:-60}
+  serve_up || die "需要常驻服务（通知由 App 发）：miwear serve start"
+  if sleepd_alive; then info "睡眠监测已在运行（pid $(cat "$SLEEPD_PID")）"; return 0; fi
+  mkdir -p "$SLEEPD_DIR"
+  local py; py=$(command -v python3)
+  nohup "$py" "$(dirname "$0")/sleep_monitor.py" --interval "$interval" --state "$SLEEPD_DIR" \
+      >>"$SLEEPD_LOG" 2>&1 &
+  echo $! > "$SLEEPD_PID"
+  sleep 2
+  if sleepd_alive; then
+    ok "睡眠监测已开启（pid $(cat "$SLEEPD_PID")，每 ${interval}s 一次）"
+    info "入睡/起床时会弹本机通知；日志：miwear sleep --log"
+    info "Termux 建议 termux-wake-lock（或跑在 tmux 里）以免被系统回收"
+  else
+    die "启动失败，看 $SLEEPD_LOG"
+  fi
+}
+
+sleepd_stop() {
+  if sleepd_alive; then kill "$(cat "$SLEEPD_PID")" 2>/dev/null; sleep 1; fi
+  rm -f "$SLEEPD_PID"
+  ok "已关闭睡眠监测"
+}
+
+sleepd_status() {
+  if sleepd_alive; then ok "睡眠监测：运行中（pid $(cat "$SLEEPD_PID")）"
+  else warn "睡眠监测：未运行（miwear sleep --daemon 开启）"; fi
+  local st=$SLEEPD_DIR/state.json
+  if [ -f "$st" ]; then
+    python3 - "$st" <<'PY'
+import json,sys,time
+d=json.load(open(sys.argv[1]))
+print("  当前状态: " + ("😴 睡眠中" if d.get("state")=="asleep" else "清醒"))
+for k,label in (("bedTime","入睡时间"),("wakeupTime","起床时间"),("detectedAt","最近检测时间")):
+    if d.get(k): print("  %s: %s" % (label, time.strftime("%m-%d %H:%M:%S", time.localtime(d[k]))))
+if d.get("lastId"): print("  最近记录: " + d["lastId"])
+PY
+  fi
+  [ -f "$SLEEPD_DIR/sleep.log" ] && { echo "  最近事件:"; tail -3 "$SLEEPD_DIR/sleep.log" | sed 's/^/    /'; }
+  return 0
+}
+
 # 看睡眠：拉今日最新睡眠段（AllDaySleep）+ 最新打点，判断「现在是否在睡」
 #   miwear sleep [--save <文件>] [--json] [--watch] [--interval 秒]
+#   miwear sleep --daemon [--interval 秒] | --stop | --status | --log [-f] | --test-notify
 cmd_sleep() {
-  local save="" asjson=0 watch=0 interval=120
+  local save="" asjson=0 watch=0 interval=60
+  local daemon=0 stop=0 status=0 dolog=0 testnotify=0 tailn=30 follow=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --save) save=${2:-}; shift 2 ;;
       --json) asjson=1; shift ;;
       --watch) watch=1; shift ;;
-      --interval) interval=${2:-120}; shift 2 ;;
+      --daemon|--on) daemon=1; shift ;;
+      --stop|--off) stop=1; shift ;;
+      --status) status=1; shift ;;
+      --log) dolog=1; shift ;;
+      --test-notify) testnotify=1; shift ;;
+      -f|--follow) follow=1; shift ;;
+      -n) tailn=${2:-30}; shift 2 ;;
+      --interval) interval=${2:-60}; shift 2 ;;
       *) shift ;;
     esac
   done
+  if [ $testnotify -eq 1 ]; then
+    serve_up || die "需要常驻服务：miwear serve start"
+    python3 "$(dirname "$0")/sleep_monitor.py" --test-notify
+    return 0
+  fi
+  if [ $stop -eq 1 ]; then sleepd_stop; return 0; fi
+  if [ $status -eq 1 ]; then sleepd_status; return 0; fi
+  if [ $dolog -eq 1 ]; then
+    [ -f "$SLEEPD_DIR/sleep.log" ] || die "还没有日志（miwear sleep --daemon）"
+    if [ $follow -eq 1 ]; then tail -n "$tailn" -f "$SLEEPD_DIR/sleep.log"; else tail -n "$tailn" "$SLEEPD_DIR/sleep.log"; fi
+    return 0
+  fi
+  if [ $daemon -eq 1 ]; then sleepd_start "$interval"; return 0; fi
   serve_up || die "需要常驻服务：miwear serve start"
 
   if [ "$watch" = 1 ]; then
@@ -1016,6 +1099,7 @@ case "${1:-}" in
   probe)     shift; cmd_probe "$@" ;;
   fitness)   shift; cmd_fitness "$@" ;;
   sleep)     shift; cmd_sleep "$@" ;;
+  alert)     shift; cmd_alert "$@" ;;
   find)      shift; cmd_find "$@" ;;
   msg)       shift; cmd_msg "$@" ;;
   sync)      shift; cmd_sync "$@" ;;

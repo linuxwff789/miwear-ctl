@@ -254,6 +254,34 @@ public class CmdServer implements WearLink.Log {
         return true;
     }
 
+    /** 从 App 自己发一条高优先级通知（有横幅 + 提示音），供 Termux 侧做提醒 */
+    public void postAlert(String title, String text, int id) {
+        try {
+            android.app.NotificationManager nm =
+                    (android.app.NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) { log("❌ 无 NotificationManager"); return; }
+            String ch = "miwear-alert";
+            if (android.os.Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(ch) == null) {
+                android.app.NotificationChannel c = new android.app.NotificationChannel(
+                        ch, "miwear 提醒", android.app.NotificationManager.IMPORTANCE_HIGH);
+                c.enableVibration(true);
+                nm.createNotificationChannel(c);
+            }
+            android.app.Notification n = new android.app.Notification.Builder(ctx, ch)
+                    .setSmallIcon(android.R.drawable.ic_dialog_info)
+                    .setContentTitle(title)
+                    .setContentText(text)
+                    .setStyle(new android.app.Notification.BigTextStyle().bigText(text))
+                    .setAutoCancel(true)
+                    .setWhen(System.currentTimeMillis())
+                    .build();
+            nm.notify(id <= 0 ? 7788 : id, n);
+            log("🔔 本机通知: " + title + " / " + text.replace('\n', ' '));
+        } catch (Throwable e) {
+            log("❌ 发通知失败: " + e);
+        }
+    }
+
     private void run(String cmd, JSONObject j, Client c, boolean keep) {
         String done;
         try {
@@ -370,6 +398,12 @@ public class CmdServer implements WearLink.Log {
                     File f = new File(path);
                     return "{\"path\":" + JSONObject.quote(path) + ",\"len\":" + f.length()
                          + ",\"id\":" + JSONObject.quote(hx) + "}";
+                }
+                case "alert": {
+                    postAlert(j.optString("title", "miwear"),
+                              j.optString("text", ""),
+                              j.optInt("id", 7788));
+                    return null;
                 }
                 case "find": {
                     ensureLink().findDevice();
