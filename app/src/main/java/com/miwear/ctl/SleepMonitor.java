@@ -62,6 +62,18 @@ public final class SleepMonitor implements WearLink.Log {
         c.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit().putInt("interval", sec).apply();
     }
 
+    /** 清空状态 / 日志（状态机回到 awake；用于消掉误判、重新开始记录） */
+    public static synchronized void resetState(Context c) {
+        c.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
+                .remove("state").remove("lastId").remove("bedTime")
+                .remove("wakeupTime").remove("detectedAt").remove("log").apply();
+        SleepMonitor m = INSTANCE;
+        if (m != null) {
+            m.state = "awake"; m.lastId = null;
+            m.bedTime = 0; m.wakeupTime = 0; m.detectedAt = 0;
+        }
+    }
+
     /** 加一行到内存日志（供 App 界面显示） */
     private static synchronized void pushLog(Context c, String line) {
         String old = savedLog(c);

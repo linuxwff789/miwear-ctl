@@ -463,6 +463,10 @@ public class CmdServer implements WearLink.Log {
                         SleepMonitor.notify(ctx, "😴 睡眠监测测试",
                                 "如果你看到这条通知，说明提醒通道通了。\n时间 " + new java.util.Date());
                         return null;
+                    } else if ("reset".equals(act)) {
+                        SleepMonitor.resetState(ctx);
+                        log("已清空睡眠监测状态/日志（状态机回到清醒）");
+                        return null;
                     } else {
                         return SleepMonitor.statusJson(ctx);
                     }

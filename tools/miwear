@@ -30,7 +30,7 @@
 #   fitness fetch <id> [文件]   拉一条 data id 的原始数据（表 → 本机，ch5 传输；默认只读不确认）
 #   sleep [--save <文件>] [--json] [--watch [--interval 秒]]  看睡眠：判断「现在是否在睡」（--watch 常驻盯变化）
 #   sleep --daemon [--interval 秒]    开启睡眠监测（后台常驻，入睡/起床弹通知 + 记日志）
-#   sleep --stop | --status | --log [-f] | --test-notify
+#   sleep --stop | --status | --log [-f] | --test-notify | --reset
 #   alert <标题> <内容>               本机弹一条通知（App 自己发，有横幅+声音）
 #   find                      找手表：让手表震动/响铃
 #   msg <包名> <文本>          给手表快应用发消息（interconnect）
@@ -517,7 +517,7 @@ print(d.get("data") or "")' 2>/dev/null)
 #   miwear sleep --daemon [--interval 秒] | --stop | --status | --log [-f] | --test-notify
 cmd_sleep() {
   local save="" asjson=0 watch=0 interval=60
-  local daemon=0 stop=0 status=0 dolog=0 testnotify=0 tailn=30 follow=0
+  local daemon=0 stop=0 status=0 dolog=0 testnotify=0 tailn=30 follow=0 reset=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --save) save=${2:-}; shift 2 ;;
@@ -528,6 +528,7 @@ cmd_sleep() {
       --status) status=1; shift ;;
       --log) dolog=1; shift ;;
       --test-notify) testnotify=1; shift ;;
+      --reset) reset=1; shift ;;
       -f|--follow) follow=1; shift ;;
       -n) tailn=${2:-30}; shift 2 ;;
       --interval) interval=${2:-60}; shift 2 ;;
@@ -541,6 +542,12 @@ cmd_sleep() {
     return 0
   fi
   if [ $stop -eq 1 ]; then sleepd_stop; return 0; fi
+  if [ $reset -eq 1 ]; then
+    serve_up || die "需要常驻服务：miwear serve start"
+    rpc_send '{"cmd":"sleepmon","action":"reset"}' 20 >/dev/null || die "重置失败"
+    ok "已清空睡眠监测状态/日志（状态机回到清醒）"
+    return 0
+  fi
   if [ $status -eq 1 ]; then sleepd_status; return 0; fi
   if [ $dolog -eq 1 ]; then
     if [ $follow -eq 1 ]; then
