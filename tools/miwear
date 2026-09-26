@@ -455,7 +455,17 @@ sleepd_alive() {  # 统一叫法：App 里的监测在跑
 
 sleepd_start() {  # sleepd_start <interval秒>
   local interval=${1:-60}
-  serve_up || die "需要常驻服务：miwear serve start（App 的后台服务负责连接手表）"
+  # 服务没在跑就自己拉一个（不标记为用户要的 CLI 服务）——关监测时才能连通知一起撤。
+  # 用一条 am 同时把「起服务 + 开监测」发下去，避开“服务起来发现没人需要又自杀”的竞态。
+  if ! serve_up; then
+    need_root; need_app
+    info "拉起后台服务并开启监测…"
+    su -c "am start-foreground-service -n $(q "$PKG/.GatewayService") --ez serve true --ez serve_user false \
+           --ez sleep_monitor true --ei sleep_interval $interval \
+           --ei port $(q "$PORT") --es mac $(q "$MAC") --es key $(q "$KEY")" >/dev/null 2>&1
+    local i=0; while [ $i -lt 24 ]; do sleep 0.5; serve_up && break; i=$((i+1)); done
+    sleep 1
+  fi
   local j; j=$(sleepmon_rpc start "$interval")
   sleep 1
   if sleepd_alive; then
@@ -941,11 +951,12 @@ cmd_rebind() {
 
 # ───────── 常驻 CLI 服务 ─────────
 # 静默启动（界面不出现）：fgs=带常驻通知（稳）/ bg=连通知都不要
-svc_start() {
-  local quiet=${1:-0} act="am start-foreground-service" extra=""
+svc_start() {  # svc_start [quiet] [user_wanted]
+  local quiet=${1:-0} user=${2:-1} act="am start-foreground-service" extra=""
   if [ "$quiet" = 1 ]; then act="am start-service"; extra="--ez quiet true"; fi
   # serve_user：标记「用户自己要的 CLI 服务」，关睡眠监测时就不会连带把它停掉
-  su -c "$act -n $(q "$PKG/.GatewayService") --ez serve true --ez serve_user true --ei port $(q "$PORT") --es mac $(q "$MAC") --es key $(q "$KEY") $extra" >/dev/null 2>&1
+  # （睡眠监测为了拿连接而顺带拉起的服务不标记 → 关监测时服务+通知一起撤）
+  su -c "$act -n $(q "$PKG/.GatewayService") --ez serve true --ez serve_user $([ "$user" = 1 ] && echo true || echo false) --ei port $(q "$PORT") --es mac $(q "$MAC") --es key $(q "$KEY") $extra" >/dev/null 2>&1
 }
 
 svc_stop() {

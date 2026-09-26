@@ -109,8 +109,11 @@ public class GatewayService extends Service {
 
         if (quiet && CmdServer.isRunning()) return START_STICKY;   // 静默模式：不挂常驻通知
 
-        // 没任何东西需要常驻（睡眠监测关了 / 用户没要 CLI / 网关没在跑）→ 停掉自己，通知随之消失
-        if (!SleepMonitor.isRunning() && !CmdServer.wantsCliService(this) && !netproxyActive()) {
+        // 没任何东西需要常驻（监测关了 / 用户没要 CLI / 本次也没要求 CLI / 网关没跑）
+        // 注意要带上 serve：否则“为监测而拉服务”的启动会在监测还没就绪时把自己停掉（竞态）
+        boolean wanted = SleepMonitor.isRunning() || CmdServer.wantsCliService(this)
+                       || netproxyActive() || serve;
+        if (!wanted) {
             try { stopForeground(true); } catch (Exception ignored) {}
             stopSelf();
             return START_NOT_STICKY;
