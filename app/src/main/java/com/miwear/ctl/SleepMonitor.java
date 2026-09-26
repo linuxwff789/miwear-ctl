@@ -144,6 +144,7 @@ public final class SleepMonitor implements WearLink.Log {
         m.thread = new Thread(m::loop, "miwear-sleep");
         m.thread.setDaemon(true);
         m.thread.start();
+        GatewayService.refresh();   // 通知栏要跟着变
     }
 
     public static synchronized void stop(Context c) {
@@ -155,6 +156,7 @@ public final class SleepMonitor implements WearLink.Log {
             synchronized (m.lock) { m.lock.notifyAll(); }
         }
         setEnabled(c, false);
+        GatewayService.refresh();   // 关监测后：不要 CLI 服务的话就把常驻通知一起撤掉
     }
 
     /** 进程重启后恢复：读回状态（重启不重复报「已入睡」） */

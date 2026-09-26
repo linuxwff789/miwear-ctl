@@ -944,7 +944,8 @@ cmd_rebind() {
 svc_start() {
   local quiet=${1:-0} act="am start-foreground-service" extra=""
   if [ "$quiet" = 1 ]; then act="am start-service"; extra="--ez quiet true"; fi
-  su -c "$act -n $(q "$PKG/.GatewayService") --ez serve true --ei port $(q "$PORT") --es mac $(q "$MAC") --es key $(q "$KEY") $extra" >/dev/null 2>&1
+  # serve_user：标记「用户自己要的 CLI 服务」，关睡眠监测时就不会连带把它停掉
+  su -c "$act -n $(q "$PKG/.GatewayService") --ez serve true --ez serve_user true --ei port $(q "$PORT") --es mac $(q "$MAC") --es key $(q "$KEY") $extra" >/dev/null 2>&1
 }
 
 svc_stop() {

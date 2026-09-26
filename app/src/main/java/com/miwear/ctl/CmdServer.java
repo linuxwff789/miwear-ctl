@@ -47,6 +47,20 @@ public class CmdServer implements WearLink.Log {
 
     /** 启动服务（已在跑则只更新 mac/key）。绑定失败会立刻返回并记日志。 */
     public static synchronized boolean start(Context ctx, String mac, String key, int port) {
+        return start(ctx, mac, key, port, false);
+    }
+
+    /**
+     * @param userWanted 是否是「用户显式开的 CLI 服务」（miwear serve start / App 里的按钮）。
+     *   睡眠监测需要一条手表连接而顺带拉起的服务不算 —— 这样关监测时能把它一并停掉（通知也跟着消失）。
+     */
+    public static synchronized boolean start(Context ctx, String mac, String key, int port, boolean userWanted) {
+        if (userWanted) {
+            try {
+                ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
+                   .putBoolean("user_serve", true).apply();
+            } catch (Exception ignored) {}
+        }
         if (INSTANCE != null) {
             if (mac != null && !mac.isEmpty()) INSTANCE.mac = mac;
             if (key != null && !key.isEmpty()) INSTANCE.key = key;
@@ -117,6 +131,7 @@ public class CmdServer implements WearLink.Log {
         for (Client c : s.clients) c.close();
         try { s.server.close(); } catch (Exception ignored) {}
         s.closeLink();
+        GatewayService.refresh();   // 服务没了 → 通知栏也要跟着变
     }
 
     // ──────────────────────── 实例状态 ────────────────────────
@@ -132,6 +147,13 @@ public class CmdServer implements WearLink.Log {
     private final List<Client> clients = new CopyOnWriteArrayList<>();
     /** 手表是单连接，所有命令串行执行 */
     private final Object lock = new Object();
+
+    /** 用户是否显式开过 CLI 服务（决定关睡眠监测时要不要一并停服务） */
+    public static boolean wantsCliService(Context ctx) {
+        try {
+            return ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean("user_serve", false);
+        } catch (Exception e) { return false; }
+    }
 
     private void savePrefs(boolean serve) {
         try {

@@ -54,8 +54,11 @@ public class BootReceiver extends BroadcastReceiver {
             si.putExtra("sleep_monitor", true)
               .putExtra("sleep_interval", SleepMonitor.savedInterval(app))
               .putExtra("serve", true)
+              .putExtra("serve_user", CmdServer.wantsCliService(app))
               .putExtra("mac", CmdServer.savedMacAny(app))
               .putExtra("key", CmdServer.savedKeyAny(app));
+        } else if (CmdServer.wantsCliService(app)) {
+            si.putExtra("serve_user", true);
         }
         try {
             if (Build.VERSION.SDK_INT >= 26) app.startForegroundService(si); else app.startService(si);
