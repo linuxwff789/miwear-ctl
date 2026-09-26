@@ -30,14 +30,14 @@
 #   fitness fetch <id> [文件]   拉一条 data id 的原始数据（表 → 本机，ch5 传输；默认只读不确认）
 #   sleep [--save <文件>] [--json] [--watch [--interval 秒]]  看睡眠：判断「现在是否在睡」（--watch 常驻盯变化）
 #   sleep --daemon [--interval 秒]    开启睡眠监测（后台常驻，入睡/起床弹通知 + 记日志）
-#   sleep --stop | --status | --log [-f] | --test-notify | --reset
+#   sleep --stop | --status | --log [-n 行数] [-f] | --test-notify | --reset
 #   alert <标题> <内容>               本机弹一条通知（App 自己发，有横幅+声音）
 #   find                      找手表：让手表震动/响铃
 #   msg <包名> <文本>          给手表快应用发消息（interconnect）
 #   sync <包名> [状态]         同步手机 App 安装状态
 #   raw <hex>                 发任意 oyt 明文（加密）并打印应答，调试用
 #   net [--launch <包名> [uri]]  启动手表联网网关（手机侧 libnetproxy.so 做 NAT）
-#   log [-n 行数] [-f]        看 App 日志（-f 持续跟随）
+#   log [-n 行数|--all] [-f] [--save <文件>] [--no-pager]   看 App 日志（默认 less 翻页）
 #   build apk|rpk [--install] 触发 GitHub Actions 构建
 #
 # 配置:  ~/.config/miwear/config      MAC=.. / KEY=.. / REPO=.. / PORT=..
@@ -550,11 +550,16 @@ cmd_sleep() {
   fi
   if [ $status -eq 1 ]; then sleepd_status; return 0; fi
   if [ $dolog -eq 1 ]; then
+    local tmp=$TMP/miwear-sleeplog.txt
+    if [ "$tailn" = "0" ] || [ -z "$tailn" ]; then sleep_log_tail 100000 > "$tmp"; else sleep_log_tail "$tailn" > "$tmp"; fi
     if [ $follow -eq 1 ]; then
-      while true; do sleep_log_tail "$tailn"; sleep 5; done
-    else
-      sleep_log_tail "$tailn"
+      info "跟随睡眠日志（Ctrl-C 退出）…"
+      while true; do
+        sleep_log_tail 8
+        sleep 5
+      done
     fi
+    if [ -t 1 ] && command -v less >/dev/null 2>&1; then less -R +G "$tmp"; else cat "$tmp"; fi
     return 0
   fi
   if [ $daemon -eq 1 ]; then sleepd_start "$interval"; return 0; fi
@@ -1007,11 +1012,15 @@ cmd_serve() {
 # ───────── log ─────────
 cmd_log() {
   need_root
-  local n=60 follow=0
+  local n=60 follow=0 save="" dumpall=0 page=1
   while [ $# -gt 0 ]; do
     case "$1" in
       -n) n=$2; shift 2 ;;
-      -f) follow=1; shift ;;
+      -f|--follow) follow=1; shift ;;
+      --save) save=${2:-}; shift 2 ;;
+      --all) dumpall=1; shift ;;
+      --no-pager|--cat) page=0; shift ;;
+      -h|--help) echo "用法: miwear log [-n 行数|--all] [-f] [--save <文件>] [--no-pager]"; return 0 ;;
       *) shift ;;
     esac
   done
@@ -1024,8 +1033,24 @@ cmd_log() {
     fi
     info "跟随日志（Ctrl-C 退出）…"
     su -c "tail -f $LOG" | sed -E 's/^(→|←) (DATA|CMD) seq=[0-9]+ ch=[0-9-]+ op=[0-9-]+ len=[0-9]+ .{60,}$/\1 \2 (帧数据略)/'
+    return
+  fi
+
+  local tmp=$TMP/miwear-log.txt
+  log_dump > "$tmp" 2>/dev/null || die "读日志失败"
+  if [ -n "$save" ]; then
+    cp "$tmp" "$save" || die "写入失败"
+    ok "已保存 $save（$(wc -l < "$save") 行）"
+    return 0
+  fi
+  if [ $dumpall -eq 0 ] && [ -n "$n" ]; then
+    tail -n "$n" "$tmp" > "$tmp.page" && mv "$tmp.page" "$tmp"
+  fi
+  if [ $page -eq 1 ] && [ -t 1 ] && command -v less >/dev/null 2>&1; then
+    # +G 停在最新；less 里 g 回顶、G 到末尾、/ 搜、q 退出
+    less -R +G "$tmp"
   else
-    log_dump | tail -n "$n"
+    cat "$tmp"
   fi
 }
 

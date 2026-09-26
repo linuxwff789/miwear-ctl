@@ -36,6 +36,7 @@ public class MainActivity extends Activity implements WearLink.Log {
     private EditText etMac, etKey, etApi, etSub, etTitle, etText, etPkg, etUser, etPhone;
     private EditText etAppPkg, etFp, etUri, etMod, etInfoSub;
     private TextView tvLog;
+    private ScrollView logSv;
     private WearLink link;
     private final StringBuilder sb = new StringBuilder();
     private static boolean LOG_STARTED = false;
@@ -169,15 +170,31 @@ public class MainActivity extends Activity implements WearLink.Log {
         rowS.addView(bSleepLog); rowS.addView(bSleepTest); rowS.addView(etSleepIv, lpIv);
         root.addView(rowS);
 
-        // ───────── 日志 ─────────
-        root.addView(label("日志"));
+        // ───────── 日志（可翻页）─────────
+        LinearLayout rowLog = new LinearLayout(this);
+        rowLog.addView(label("日志"));
+        Button bLogUp = new Button(this);    bLogUp.setText("▲ 上翻");
+        Button bLogDown = new Button(this);  bLogDown.setText("▼ 下翻");
+        Button bLogTop = new Button(this);   bLogTop.setText("⤒ 最旧");
+        Button bLogEnd = new Button(this);   bLogEnd.setText("⤓ 最新");
+        Button bLogCopy = new Button(this);  bLogCopy.setText("复制");
+        Button bLogClear = new Button(this); bLogClear.setText("清空");
+        rowLog.addView(bLogUp); rowLog.addView(bLogDown);
+        rowLog.addView(bLogTop); rowLog.addView(bLogEnd);
+        rowLog.addView(bLogCopy); rowLog.addView(bLogClear);
+        root.addView(rowLog);
+
         tvLog = new TextView(this);
-        tvLog.setMovementMethod(new ScrollingMovementMethod());
+        // ⚠ 不要用 ScrollingMovementMethod：它会吃掉拖动事件，导致内外层 ScrollView 都不滚
+        tvLog.setTextIsSelectable(true);
         tvLog.setTextSize(11);
-        ScrollView logSv = new ScrollView(this);
+        logSv = new ScrollView(this);
+        logSv.setFillViewport(true);
+        logSv.setVerticalScrollBarEnabled(true);
         logSv.addView(tvLog);
         root.addView(logSv, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, (int) (220 * getResources().getDisplayMetrics().density)));
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (int) (260 * getResources().getDisplayMetrics().density)));
 
         // 整页可滚动（按钮多，小屏不至于被裁）
         ScrollView outer = new ScrollView(this);
@@ -200,6 +217,21 @@ public class MainActivity extends Activity implements WearLink.Log {
         }));
         bClose.setOnClickListener(v -> { if (link != null) link.close(); });
         bSave.setOnClickListener(v -> { savePrefs(); log("已保存 MAC/KEY 到本机配置"); });
+
+        // ───────── 日志翻页按钮 ─────────
+        bLogUp.setOnClickListener(v -> logSv.smoothScrollBy(0, -Math.max(80, logSv.getHeight() * 8 / 10)));
+        bLogDown.setOnClickListener(v -> logSv.smoothScrollBy(0, Math.max(80, logSv.getHeight() * 8 / 10)));
+        bLogTop.setOnClickListener(v -> logSv.fullScroll(View.FOCUS_UP));
+        bLogEnd.setOnClickListener(v -> logSv.fullScroll(View.FOCUS_DOWN));
+        bLogCopy.setOnClickListener(v -> {
+            try {
+                android.content.ClipboardManager cm =
+                        (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("miwear log", sb.toString()));
+                log("已复制日志到剪贴板（" + sb.length() + " 字节）");
+            } catch (Exception e) { log("复制失败: " + e); }
+        });
+        bLogClear.setOnClickListener(v -> { sb.setLength(0); tvLog.setText(""); });
 
         // ───────── 睡眠监测按钮 ─────────
         bSleepOn.setOnClickListener(v -> {
@@ -805,11 +837,27 @@ public class MainActivity extends Activity implements WearLink.Log {
     }
 
     @Override public void log(String s) {
-        String line = s + "\n";
+        final String line = s + "\n";
         try (java.io.FileOutputStream f = new java.io.FileOutputStream(
                 new File(getFilesDir(), "log.txt"), true)) {
             f.write(line.getBytes("UTF-8"));
         } catch (Exception ignored) {}
-        runOnUiThread(() -> { sb.append(line); tvLog.setText(sb.toString()); });
+        runOnUiThread(() -> {
+            // 只有本来就贴着底部时才自动跟到最新，避免正翻历史时被拽走
+            boolean atBottom = true;
+            try {
+                if (logSv != null && tvLog != null)
+                    atBottom = logSv.getScrollY() + logSv.getHeight() >= tvLog.getHeight() - 24;
+            } catch (Exception ignored) {}
+            sb.append(line);
+            // 只保留最近 600 行，否则 TextView 会越滚越卡
+            int nl = 0, cut = -1;
+            for (int i = sb.length() - 1; i >= 0; i--) {
+                if (sb.charAt(i) == '\n' && ++nl > 600) { cut = i + 1; break; }
+            }
+            if (cut > 0) sb.delete(0, cut);
+            tvLog.setText(sb.toString());
+            if (atBottom && logSv != null) logSv.post(() -> logSv.fullScroll(View.FOCUS_DOWN));
+        });
     }
 }
