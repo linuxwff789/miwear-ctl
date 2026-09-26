@@ -185,8 +185,8 @@ public class MainActivity extends Activity implements WearLink.Log {
         root.addView(rowLog);
 
         tvLog = new TextView(this);
-        // ⚠ 不要用 ScrollingMovementMethod：它会吃掉拖动事件，导致内外层 ScrollView 都不滚
-        tvLog.setTextIsSelectable(true);
+        // ⚠ 不要用 ScrollingMovementMethod、也不要 setTextIsSelectable：
+        //   两者都会把拖动事件吃掉，导致日志区根本滑不动（要复制就用「复制」按钮）
         tvLog.setTextSize(11);
         logSv = new ScrollView(this);
         logSv.setFillViewport(true);
