@@ -970,7 +970,12 @@ cmd_serve() {
       need_root; need_app; ensure_key
       local quiet=0
       [ "${2:-}" = "--quiet" ] && quiet=1
-      if serve_up; then ok "服务已在运行（127.0.0.1:$PORT）"; return 0; fi
+      if serve_up; then
+        # socket 在 ≠ 前台服务在（服务可能被撤了但进程还活着）→ 补一发，保证通知栏/前台状态一致
+        svc_start "$quiet" 1
+        ok "服务已在运行（127.0.0.1:$PORT）"
+        return 0
+      fi
       # 白名单：避免被 Android 的 app freezer 冻结（联网时必须）
       su -c "dumpsys deviceidle whitelist +$PKG" >/dev/null 2>&1
       su -c "am set-standby-bucket $PKG active" >/dev/null 2>&1

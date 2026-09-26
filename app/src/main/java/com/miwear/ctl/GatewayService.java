@@ -146,23 +146,34 @@ public class GatewayService extends Service {
     }
 
     /** 任何模块（睡眠监测 / CLI 服务）启停后调用：刷新通知；没人需要了就停掉自己（通知消失） */
+    private static boolean refreshing;
+
     public static void refresh() { refresh("state-change"); }
 
     /** @param why 谁触发的刷新（写日志，便于排查“通知怎么自己变了/没了”） */
     public static void refresh(String why) {
         GatewayService s = INSTANCE_SVC;
         if (s == null) return;
-        boolean busy = SleepMonitor.isRunning() || CmdServer.wantsCliService(s)
-                    || (CmdServer.isRunning() && s.netproxyActive());
-        s.appendSvcLog("refresh(" + why + "): monitor=" + SleepMonitor.isRunning()
-                + " userCli=" + CmdServer.wantsCliService(s) + " netproxy=" + s.netproxyActive()
-                + " → " + (busy ? "保留服务/刷新通知" : "停服务撤通知"));
-        if (!busy) {
-            try { s.stopForeground(true); } catch (Exception ignored) {}
-            s.stopSelf();
-            return;
+        if (refreshing) return;              // CmdServer.stop() 会回调刷新，防递归
+        refreshing = true;
+        try {
+            boolean busy = SleepMonitor.isRunning() || CmdServer.wantsCliService(s)
+                        || (CmdServer.isRunning() && s.netproxyActive());
+            s.appendSvcLog("refresh(" + why + "): monitor=" + SleepMonitor.isRunning()
+                    + " userCli=" + CmdServer.wantsCliService(s) + " netproxy=" + s.netproxyActive()
+                    + " → " + (busy ? "保留服务/刷新通知" : "停服务撤通知"));
+            if (!busy) {
+                // 连本地 socket 一起关掉：否则会留下「服务没了但 socket 还活着」的错乱状态，
+                // 之后 miwear serve start 会误判成“已在运行”而不再拉起前台服务（通知栏就永远不出现）
+                if (CmdServer.isRunning()) CmdServer.stop();
+                try { s.stopForeground(true); } catch (Exception ignored) {}
+                s.stopSelf();
+                return;
+            }
+            s.showForeground(CmdServer.wantsCliService(s));
+        } finally {
+            refreshing = false;
         }
-        s.showForeground(CmdServer.wantsCliService(s));
     }
 
     /** 只写文件，不弹 Toast；供诊断用 */
