@@ -176,6 +176,21 @@ miwear sleep --stop                     # 关闭
 > 监测**在 App 内常驻**（`SleepMonitor.java` + 前台服务），Termux 只负责开关和看日志；关掉 Termux 也照跑。
 > 也可以在 App 界面直接点「开启监测 / 关闭 / 状态 / 看日志 / 测试通知」。已开启则开机自启。
 
+**常驻通知会跟着状态走**（`GatewayService.showForeground / refresh`）：
+
+| 状态 | 通知栏 |
+|---|---|
+| 只开了监测（没开过 CLI 服务） | `miwear 睡眠监测中 · 入睡/起床会弹通知` |
+| 只开了 CLI 服务 | `miwear CLI 服务运行中 · CLI 127.0.0.1:38787` |
+| 两者都开 | `miwear 睡眠监测中 · 入睡/起床会弹通知 · CLI 127.0.0.1:38787` |
+| 关掉监测且没开过 CLI | **通知直接撤掉**（服务与本地 socket 一起停） |
+| 关掉监测但开过 CLI | 变回 `miwear CLI 服务运行中` |
+
+> 判据是「用户有没有主动 `miwear serve start`」（内部标记 `user_serve`）：睡眠监测为了拿蓝牙连接
+> 顺带拉起的后台服务不算用户要的，所以关监测会连它一起收掉。排查用：
+> `miwear log --all | grep '\[服务\]'`（每次启停都写了决策依据），
+> `miwear sleep --log` 里也会记「🛑 睡眠监测已停止（触发：…）」。
+
 开启后行为（`tools/sleep_monitor.py`）：
 
 1. 每 `interval` 秒看一遍 App 已落盘的睡眠段（`files/fitness/*.bin`），以**最新那一段**为准：
