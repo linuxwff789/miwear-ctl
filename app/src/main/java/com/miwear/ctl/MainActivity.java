@@ -243,7 +243,7 @@ public class MainActivity extends Activity implements WearLink.Log {
             log("✅ 睡眠监测已开启（每 " + iv + "s 一次）；入睡/起床会弹通知，常驻通知显示「睡眠监测中」");
         });
         bSleepOff.setOnClickListener(v -> {
-            SleepMonitor.stop(this);
+            SleepMonitor.stop(this, "App 界面关闭按钮");
             log("🛑 睡眠监测已关闭" + (CmdServer.wantsCliService(this)
                     ? "（CLI 服务仍开着，常驻通知改为「CLI 服务运行中」）"
                     : "（后台服务已停，常驻通知已撤掉）"));
@@ -700,7 +700,7 @@ public class MainActivity extends Activity implements WearLink.Log {
                 ensureServiceStarted("睡眠监测");
                 log("✅ 睡眠监测已开启（每 " + iv + "s）");
             } else {
-                SleepMonitor.stop(this);
+                SleepMonitor.stop(this, "intent sleep_monitor=false");
                 log("🛑 睡眠监测已关闭");
             }
             return;

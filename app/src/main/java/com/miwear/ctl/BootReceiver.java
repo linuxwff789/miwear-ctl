@@ -26,7 +26,7 @@ public class BootReceiver extends BroadcastReceiver {
         if (a == null) return;
 
         if ("com.termux.miwear.STOP".equals(a)) {
-            SleepMonitor.stop(app);
+            SleepMonitor.stop(app, "boot receiver STOP");
             CmdServer.stop();
             try { app.stopService(new Intent(app, GatewayService.class)); } catch (Exception ignored) {}
             return;

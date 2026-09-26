@@ -68,7 +68,7 @@ public class GatewayService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         boolean stop = intent != null && intent.getBooleanExtra("serve_stop", false);
         if (stop) {
-            SleepMonitor.stop(this);
+            SleepMonitor.stop(this, "serve_stop");
             CmdServer.stop();
             try { stopForeground(true); } catch (Exception ignored) {}
             stopSelf();
@@ -101,7 +101,7 @@ public class GatewayService extends Service {
             if (intent.getBooleanExtra("sleep_monitor", false)) {
                 SleepMonitor.start(this, intent.getIntExtra("sleep_interval", 60));
             } else {
-                SleepMonitor.stop(this);
+                SleepMonitor.stop(this, "intent sleep_monitor=false");
             }
         } else {
             autoStartMonitors();
@@ -146,17 +146,33 @@ public class GatewayService extends Service {
     }
 
     /** 任何模块（睡眠监测 / CLI 服务）启停后调用：刷新通知；没人需要了就停掉自己（通知消失） */
-    public static void refresh() {
+    public static void refresh() { refresh("state-change"); }
+
+    /** @param why 谁触发的刷新（写日志，便于排查“通知怎么自己变了/没了”） */
+    public static void refresh(String why) {
         GatewayService s = INSTANCE_SVC;
         if (s == null) return;
         boolean busy = SleepMonitor.isRunning() || CmdServer.wantsCliService(s)
                     || (CmdServer.isRunning() && s.netproxyActive());
+        s.appendSvcLog("refresh(" + why + "): monitor=" + SleepMonitor.isRunning()
+                + " userCli=" + CmdServer.wantsCliService(s) + " netproxy=" + s.netproxyActive()
+                + " → " + (busy ? "保留服务/刷新通知" : "停服务撤通知"));
         if (!busy) {
             try { s.stopForeground(true); } catch (Exception ignored) {}
             s.stopSelf();
             return;
         }
         s.showForeground(CmdServer.wantsCliService(s));
+    }
+
+    /** 只写文件，不弹 Toast；供诊断用 */
+    private void appendSvcLog(String line) {
+        try {
+            java.io.File f = new java.io.File(getFilesDir(), "log.txt");
+            try (java.io.FileOutputStream fo = new java.io.FileOutputStream(f, true)) {
+                fo.write(("[\u670d\u52a1] " + line + "\n").getBytes("UTF-8"));
+            }
+        } catch (Exception ignored) {}
     }
 
     private boolean netproxyActive() {

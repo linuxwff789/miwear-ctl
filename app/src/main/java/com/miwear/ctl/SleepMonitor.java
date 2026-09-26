@@ -144,19 +144,22 @@ public final class SleepMonitor implements WearLink.Log {
         m.thread = new Thread(m::loop, "miwear-sleep");
         m.thread.setDaemon(true);
         m.thread.start();
-        GatewayService.refresh();   // 通知栏要跟着变
+        GatewayService.refresh("monitor-start");   // 通知栏要跟着变
     }
 
-    public static synchronized void stop(Context c) {
+    public static synchronized void stop(Context c) { stop(c, "unknown"); }
+
+    /** @param why 谁触发的停止（便于日后查“怎么自己关了”） */
+    public static synchronized void stop(Context c, String why) {
         SleepMonitor m = INSTANCE;
         INSTANCE = null;
         if (m != null) {
             m.running = false;
-            m.log("🛑 睡眠监测已停止");
+            m.log("🛑 睡眠监测已停止（触发：" + why + "）");
             synchronized (m.lock) { m.lock.notifyAll(); }
         }
         setEnabled(c, false);
-        GatewayService.refresh();   // 关监测后：不要 CLI 服务的话就把常驻通知一起撤掉
+        GatewayService.refresh("monitor-stop:" + why);   // 关监测后：不要 CLI 服务的话就把常驻通知一起撤掉
     }
 
     /** 进程重启后恢复：读回状态（重启不重复报「已入睡」） */

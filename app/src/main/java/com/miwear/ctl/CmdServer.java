@@ -478,7 +478,7 @@ public class CmdServer implements WearLink.Log {
                     if ("start".equals(act)) {
                         SleepMonitor.start(ctx, j.optInt("interval", 60));
                     } else if ("stop".equals(act)) {
-                        SleepMonitor.stop(ctx);
+                        SleepMonitor.stop(ctx, "sleepmon stop (CLI)");
                     } else if ("log".equals(act)) {
                         return JSONObject.quote(sleepLog(ctx));
                     } else if ("test".equals(act)) {
