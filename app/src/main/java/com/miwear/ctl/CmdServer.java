@@ -332,22 +332,37 @@ public class CmdServer implements WearLink.Log {
                     }
                 }
                 File dir = new File(s.ctx.getFilesDir(), "fitness");
-                int got = 0;
+                int got = 0, sleepIds = 0, missing = 0, unfinished = 0, totalIds = 0;
+                long now = System.currentTimeMillis();
                 for (int sub : new int[]{1, 2}) {
                     List<WearLink.FitId> ids;
                     try { ids = l.fitnessIds(sub, false); } catch (Throwable t) { continue; }
+                    totalIds += ids.size();
                     for (WearLink.FitId id : ids) {
                         if (!isSleepSegId(id)) continue;
+                        sleepIds++;
                         File f = new File(dir, id.hex() + ".bin");
                         boolean need;
-                        if (!f.exists()) need = sub == 1;                    // 历史上的缺就缺了，不补
-                        else need = SleepMonitor.isUnfinishedSleep(f);          // 还没睡完 → 刷新一下看看醒没醒
+                        if (!f.exists()) {
+                            need = sub == 1;                                  // 历史上的缺就缺了，不补
+                            if (need) missing++;
+                        } else if (SleepMonitor.isUnfinishedSleep(f)) {
+                            unfinished++;
+                            // 未完成段 10 分钟内刷过一次就不重复拉（40KB 过蓝牙，别太勤）
+                            need = now - f.lastModified() > 10 * 60_000L;
+                        } else {
+                            need = false;
+                        }
                         if (!need) continue;
                         if (got >= 2) break;                                  // 一次最多两条，别把蓝牙堵太久
                         try {
                             if (l.fitnessFetchToFile(id.raw, 15000, false) != null) got++;
                         } catch (Throwable ignored) {}
                     }
+                }
+                if (got > 0 || unfinished > 0) {
+                    s.log("🔄 睡眠记录同步：8/1+8/2 共 " + totalIds + " 个 id，睡眠段 " + sleepIds
+                        + "（本地缺 " + missing + "、未完成 " + unfinished + "）→ 拉取 " + got + " 条");
                 }
                 if (got > 0) SleepMonitor.kick();   // 新记录落盘 → 立即判定
                 return got;
