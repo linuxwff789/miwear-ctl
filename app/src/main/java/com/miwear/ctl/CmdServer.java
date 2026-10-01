@@ -321,7 +321,16 @@ public class CmdServer implements WearLink.Log {
         synchronized (s.lock) {
             try {
                 WearLink l = s.link;
-                if (l == null || !l.isConnected()) return -1;
+                if (l == null || !l.isConnected() || !l.isAuthenticated()) {
+                    // 监测靠自己把连接拉起来：不然没人跑 CLI 时整晚都没有蓝牙链路，永远等不到记录
+                    try {
+                        l = s.ensureLink();
+                        pullFails = 0;
+                    } catch (Throwable t) {
+                        if (pullFails++ % 5 == 0) s.log("⚠ 睡眠监测：连手表失败（" + t + "）");
+                        return -1;
+                    }
+                }
                 File dir = new File(s.ctx.getFilesDir(), "fitness");
                 int got = 0;
                 for (int sub : new int[]{1, 2}) {
@@ -353,6 +362,9 @@ public class CmdServer implements WearLink.Log {
         return id.dataType == 0 && (id.dailyType == 2 || id.dailyType == 3
                 || (id.dailyType == 8 && id.fileType == 1));
     }
+
+    /** 连续连接失败计数（只为了别把日志刷满） */
+    private static int pullFails;
 
     /** 向所有已连接客户端广播一条日志（供常驻服务把 App 内部日志实时传给 CLI） */
     public static void sendLog(String line) {
