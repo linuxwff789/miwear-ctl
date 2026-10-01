@@ -88,7 +88,9 @@ public class WearLink {
 
     /** 连接是否仍然有效（供常驻服务判断是否需要重连） */
     public boolean isConnected() {
-        try { return running && socket != null && socket.isConnected() && !socket.isClosed(); }
+        // 注：BluetoothSocket 没有 isClosed()。链路是否可用由 running 决定——
+        // readLoop 退出 / 写失败时 markDead() 会把它置 false。
+        try { return running && socket != null && socket.isConnected(); }
         catch (Exception e) { return false; }
     }
 
