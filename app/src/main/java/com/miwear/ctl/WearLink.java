@@ -1063,10 +1063,7 @@ public class WearLink {
                         if (APP != null) {
                             java.io.File dir = new java.io.File(APP.getFilesDir(), "fitness");
                             dir.mkdirs();
-                            java.io.File out = new java.io.File(dir, got.hex() + ".bin");
-                            try (java.io.FileOutputStream fo = new java.io.FileOutputStream(out)) {
-                                fo.write(fitPayload);
-                            }
+                            writeFitFile(new java.io.File(dir, got.hex() + ".bin"), fitPayload);
                         }
                     } catch (Exception e) { log.log("⚠ 保存健身记录失败: " + e); }
                     SleepMonitor.kick();   // 睡眠监测：立刻判定，不用等下一个轮询
@@ -1170,9 +1167,25 @@ public class WearLink {
         dir.mkdirs();
         String name = new FitId(java.util.Arrays.copyOfRange(id, 0, 7)).hex() + ".bin";
         java.io.File out = new java.io.File(dir, name);
-        try (java.io.FileOutputStream fo = new java.io.FileOutputStream(out)) { fo.write(data); }
+        writeFitFile(out, data);
         log.log("💾 已保存 " + out.getAbsolutePath() + "（" + data.length + "B）");
         return out.getAbsolutePath();
+    }
+
+    /**
+     * 原子落盘：先写 .tmp 再 rename。
+     * 不能直接 FileOutputStream(out) —— 它会先截断，监测线程可能读到半截文件、
+     * 解析失败而回退到旧睡眠段，导致误报“起床/入睡”。
+     */
+    private static void writeFitFile(java.io.File out, byte[] data) throws Exception {
+        java.io.File tmp = new java.io.File(out.getParentFile(), out.getName() + ".tmp");
+        try (java.io.FileOutputStream fo = new java.io.FileOutputStream(tmp)) {
+            fo.write(data); fo.getFD().sync();
+        }
+        if (!tmp.renameTo(out)) {
+            try (java.io.FileOutputStream fo = new java.io.FileOutputStream(out)) { fo.write(data); }
+            try { tmp.delete(); } catch (Exception ignored) {}
+        }
     }
 
     // ───────── 设备信息 / 电量 / 通用读取 ─────────
