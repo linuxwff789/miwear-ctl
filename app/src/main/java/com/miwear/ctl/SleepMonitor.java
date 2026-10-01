@@ -205,17 +205,24 @@ public final class SleepMonitor implements WearLink.Log {
             log(ok ? "🔔 媒体控制就绪（有通知使用权，可精准暂停）"
                    : "⚠ 没有通知使用权，入睡只能盲发媒体键（执行 miwear sleep --grant 或手动开通知使用权）");
         }
-        int miss = 0, cycles = 0;
+        int miss = 0;
+        long lastPull = 0, lastBeat = 0;
         while (running) {
             try {
                 // 定期主动向手表要一次睡眠记录（不能只在“没有历史文件”时才问——
                 // 只要落盘里有过一条睡眠段，旧的 miss 判定就永远不会触发，整晚都等不到实时记录）。
-                cycles++;
-                if (cycles % 5 == 1) CmdServer.pullSleepRecords();
-                // 心跳：每 ~30 个周期报一次，用于区分“线程卡死”和“只是没记录”
-                if (cycles % 30 == 0) {
+                // ⚠ 按真实时间限流，不要用 cycles：手表每次 push 记录都会 kick()，
+                //   循环会空转 → cycles 疯涨（实测 ~7 次/秒）→ 频繁 fitnessIds 把蓝牙链路打爆。
+                long nowMs = System.currentTimeMillis();
+                if (nowMs - lastPull >= Math.max(5, interval) * 1000L * 5) {
+                    lastPull = nowMs;
+                    CmdServer.pullSleepRecords();
+                }
+                // 心跳：每 ~10 分钟报一次，用于区分“线程卡死”和“只是没记录”
+                if (nowMs - lastBeat >= 10 * 60_000L) {
+                    lastBeat = nowMs;
                     WearLink cl = CmdServer.currentLink();
-                    log("💓 监测心跳 cycle=" + cycles + " state=" + state
+                    log("💓 监测心跳 state=" + state
                         + " link=" + (cl != null && cl.isConnected() ? "已连接" : "未连接"));
                 }
 
