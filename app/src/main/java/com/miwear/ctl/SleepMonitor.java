@@ -212,6 +212,12 @@ public final class SleepMonitor implements WearLink.Log {
                 // 只要落盘里有过一条睡眠段，旧的 miss 判定就永远不会触发，整晚都等不到实时记录）。
                 cycles++;
                 if (cycles % 5 == 1) CmdServer.pullSleepRecords();
+                // 心跳：每 ~30 个周期报一次，用于区分“线程卡死”和“只是没记录”
+                if (cycles % 30 == 0) {
+                    WearLink cl = CmdServer.currentLink();
+                    log("💓 监测心跳 cycle=" + cycles + " state=" + state
+                        + " link=" + (cl != null && cl.isConnected() ? "已连接" : "未连接"));
+                }
 
                 SleepSeg seg = newestSleep();
                 if (seg == null) {

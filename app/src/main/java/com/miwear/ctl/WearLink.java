@@ -88,7 +88,7 @@ public class WearLink {
 
     /** 连接是否仍然有效（供常驻服务判断是否需要重连） */
     public boolean isConnected() {
-        try { return running && socket != null && socket.isConnected(); }
+        try { return running && socket != null && socket.isConnected() && !socket.isClosed(); }
         catch (Exception e) { return false; }
     }
 
@@ -104,6 +104,7 @@ public class WearLink {
     private void readLoop() {
         byte[] buf = new byte[8192];
         ByteArrayOutputStream acc = new ByteArrayOutputStream();
+        try {
         while (running) {
             try {
                 int n = in.read(buf);
@@ -178,11 +179,29 @@ public class WearLink {
                 break;
             }
         }
+        } finally {
+            // 读线程退出 = 蓝牙链路已死。以前这里只 break，running 仍是 true、socket 也没关，
+            // 于是 isConnected() 永远返回 true，后续命令全往死 socket 写（Broken pipe）且不重连。
+            markDead();
+        }
+    }
+
+    /** 链路不可用：置 running=false 并关 socket，让下一次 ensureLink() 走重连。 */
+    void markDead() {
+        boolean was = running;
+        running = false;
+        try { if (socket != null) socket.close(); } catch (Exception ignored) {}
+        if (was) { try { log.log("⚠ 蓝牙链路已断开（下次命令自动重连）"); } catch (Exception ignored) {} }
     }
 
     private void write(byte[] b) throws Exception {
-        out.write(b);
-        out.flush();
+        try {
+            out.write(b);
+            out.flush();
+        } catch (Exception e) {
+            markDead();   // 写失败多半是 socket 已断 → 标记，避免下次继续用死链路
+            throw e;
+        }
     }
 
     /** 发送一个 DATA 帧，返回其 seq */

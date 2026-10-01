@@ -336,7 +336,15 @@ public class CmdServer implements WearLink.Log {
                 long now = System.currentTimeMillis();
                 for (int sub : new int[]{1, 2}) {
                     List<WearLink.FitId> ids;
-                    try { ids = l.fitnessIds(sub, false); } catch (Throwable t) { continue; }
+                    try {
+                        ids = l.fitnessIds(sub, false);
+                    } catch (Throwable t) {
+                        // 链路可能已死（Broken pipe）→ 主动丢弃，下一轮 ensureLink() 才会重连。
+                        // 以前这里只 continue，死链路会被一直复用，整晚拉不到任何记录。
+                        if (pullFails++ % 5 == 0) s.log("⚠ 睡眠监测：拉取 8/" + sub + " 失败（" + t + "）");
+                        s.closeLink();
+                        break;
+                    }
                     totalIds += ids.size();
                     for (WearLink.FitId id : ids) {
                         if (!isSleepSegId(id)) continue;
