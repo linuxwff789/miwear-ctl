@@ -307,6 +307,53 @@ public class CmdServer implements WearLink.Log {
         }
     }
 
+    /**
+     * 睡眠监测专用：主动把「睡眠记录」拉下来（不靠手表自发推送）。
+     *   今日 8/1：本地没有的、或者本地还是 isSleepFinish=0（还没睡完）的 → 拉；
+     *   历史 8/2：只重拉本地已有但还没睡完的（过午夜后昨晚那段会落到历史里）。
+     * confirm=false —— 不确认，手表就不会把记录删掉，能反复读。
+     *
+     * @return 新拉到/刷新的条数；-1 表示没有可用连接
+     */
+    public static int pullSleepRecords() {
+        CmdServer s = INSTANCE;
+        if (s == null) return -1;
+        synchronized (s.lock) {
+            try {
+                WearLink l = s.link;
+                if (l == null || !l.isConnected()) return -1;
+                File dir = new File(s.ctx.getFilesDir(), "fitness");
+                int got = 0;
+                for (int sub : new int[]{1, 2}) {
+                    List<WearLink.FitId> ids;
+                    try { ids = l.fitnessIds(sub, false); } catch (Throwable t) { continue; }
+                    for (WearLink.FitId id : ids) {
+                        if (!isSleepSegId(id)) continue;
+                        File f = new File(dir, id.hex() + ".bin");
+                        boolean need;
+                        if (!f.exists()) need = sub == 1;                    // 历史上的缺就缺了，不补
+                        else need = SleepMonitor.isUnfinishedSleep(f);          // 还没睡完 → 刷新一下看看醒没醒
+                        if (!need) continue;
+                        if (got >= 2) break;                                  // 一次最多两条，别把蓝牙堵太久
+                        try {
+                            if (l.fitnessFetchToFile(id.raw, 15000, false) != null) got++;
+                        } catch (Throwable ignored) {}
+                    }
+                }
+                if (got > 0) SleepMonitor.kick();   // 新记录落盘 → 立即判定
+                return got;
+            } catch (Throwable t) {
+                return -1;
+            }
+        }
+    }
+
+    /** AllDaySleep(8/1) 或 午睡/夜睡 类段 —— 跟 SleepMonitor.newestSleep 的筛选保持一致 */
+    private static boolean isSleepSegId(WearLink.FitId id) {
+        return id.dataType == 0 && (id.dailyType == 2 || id.dailyType == 3
+                || (id.dailyType == 8 && id.fileType == 1));
+    }
+
     /** 向所有已连接客户端广播一条日志（供常驻服务把 App 内部日志实时传给 CLI） */
     public static void sendLog(String line) {
         CmdServer s = INSTANCE;
@@ -476,6 +523,7 @@ public class CmdServer implements WearLink.Log {
                 case "sleepmon": {
                     String act = j.optString("action", "status");
                     if ("start".equals(act)) {
+                        SleepMonitor.setPauseMedia(ctx, j.optBoolean("pause_media", true));
                         SleepMonitor.start(ctx, j.optInt("interval", 60));
                     } else if ("stop".equals(act)) {
                         SleepMonitor.stop(ctx, "sleepmon stop (CLI)");
@@ -484,6 +532,20 @@ public class CmdServer implements WearLink.Log {
                     } else if ("test".equals(act)) {
                         SleepMonitor.notify(ctx, "😴 睡眠监测测试",
                                 "如果你看到这条通知，说明提醒通道通了。\n时间 " + new java.util.Date());
+                        return null;
+                    } else if ("testpause".equals(act)) {
+                        boolean on = MediaPause.ensureListener(ctx);
+                        String r = MediaPause.pauseAllPlaying(ctx);
+                        log("⏸ 试停媒体（通知使用权 " + (on ? "✓" : "✗，走兜底") + "）：" + r);
+                        return new org.json.JSONObject()
+                                .put("listener", on).put("result", r).toString();
+                    } else if ("pauseon".equals(act)) {
+                        SleepMonitor.setPauseMedia(ctx, true);
+                        log("✅ 已开：入睡时暂停正在播放的媒体");
+                        return null;
+                    } else if ("pauseoff".equals(act)) {
+                        SleepMonitor.setPauseMedia(ctx, false);
+                        log("🛑 已关：入睡时不再暂停媒体");
                         return null;
                     } else if ("reset".equals(act)) {
                         SleepMonitor.resetState(ctx);

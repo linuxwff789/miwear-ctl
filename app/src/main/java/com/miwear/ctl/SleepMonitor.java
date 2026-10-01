@@ -54,6 +54,15 @@ public final class SleepMonitor implements WearLink.Log {
         return c.getSharedPreferences(PREF, Context.MODE_PRIVATE).getString("log", "");
     }
 
+    /** 睡着后要不要暂停正在播放的媒体（听书/音乐），默认开 */
+    public static synchronized boolean pauseMedia(Context c) {
+        return c.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean("pause_media", true);
+    }
+
+    public static synchronized void setPauseMedia(Context c, boolean on) {
+        c.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit().putBoolean("pause_media", on).apply();
+    }
+
     public static synchronized void setEnabled(Context c, boolean on) {
         c.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit().putBoolean("enabled", on).apply();
     }
@@ -189,15 +198,24 @@ public final class SleepMonitor implements WearLink.Log {
     // ─────────────────────────── 主循环 ───────────────────────────
 
     private void loop() {
-        log("👀 睡眠监测启动（间隔 " + interval + "s，当前状态 " + ("asleep".equals(state) ? "睡眠中" : "清醒") + "）");
-        int miss = 0;
+        log("👀 睡眠监测启动（间隔 " + interval + "s，当前状态 " + ("asleep".equals(state) ? "睡眠中" : "清醒")
+            + "，入睡暂停媒体 " + (pauseMedia(ctx) ? "开" : "关") + "）");
+        if (pauseMedia(ctx)) {
+            boolean ok = MediaPause.ensureListener(ctx);
+            log(ok ? "🔔 媒体控制就绪（有通知使用权，可精准暂停）"
+                   : "⚠ 没有通知使用权，入睡只能盲发媒体键（执行 miwear sleep --grant 或手动开通知使用权）");
+        }
+        int miss = 0, cycles = 0;
         while (running) {
             try {
+                // 定期主动向手表要一次睡眠记录（不能只在“没有历史文件”时才问——
+                // 只要落盘里有过一条睡眠段，旧的 miss 判定就永远不会触发，整晚都等不到实时记录）。
+                cycles++;
+                if (cycles % 5 == 1) CmdServer.pullSleepRecords();
+
                 SleepSeg seg = newestSleep();
                 if (seg == null) {
                     miss++;
-                    // 长时间没有推送 → 主动问一次手表（也会促使它把积压记录推过来）
-                    if (miss % 5 == 1) pokeWatch();
                 } else {
                     miss = 0;
                     step(seg);
@@ -217,17 +235,19 @@ public final class SleepMonitor implements WearLink.Log {
     }
 
     /** 让 CmdServer 去问一次 8/1（手表会顺带把积压记录推下来） */
+    @SuppressWarnings("unused")
     private void pokeWatch() { CmdServer.pokeFitnessIds(); }
-
     private void step(SleepSeg seg) {
         boolean fin = seg.isSleepFinish;
         if (!fin && !"asleep".equals(state)) {
             long now = System.currentTimeMillis() / 1000L;
             state = "asleep"; lastId = seg.id; bedTime = seg.bedTime; detectedAt = now;
             persistState();
+            String pause = pauseMedia(ctx) ? MediaPause.pauseAllPlaying(ctx) : "（已关掉“入睡暂停媒体”）";
+            log("😴 入睡  bedTime=" + ts(seg.bedTime) + "  detected=" + ts(now) + "  id=" + seg.id
+                + "  → " + pause);
             String msg = "入睡时间 " + ts(seg.bedTime) + "（表记录）\n"
-                       + "检测到 " + ts(now) + "\n记录 id " + seg.id;
-            log("😴 入睡  bedTime=" + ts(seg.bedTime) + "  detected=" + ts(now) + "  id=" + seg.id);
+                       + "检测到 " + ts(now) + "\n记录 id " + seg.id + "\n" + pause;
             notify(ctx, "😴 已入睡", msg);
         } else if (fin && "asleep".equals(state)) {
             long now = System.currentTimeMillis() / 1000L;
@@ -260,6 +280,18 @@ public final class SleepMonitor implements WearLink.Log {
 
     private File fitnessDir() { return new File(ctx.getFilesDir(), "fitness"); }
 
+    /** 本地这条 AllDaySleep 是不是「还没睡完」（isSleepFinish=0）；解析不了返回 false */
+    public static boolean isUnfinishedSleep(File f) {
+        SleepSeg s = parseAllDaySleep(f);
+        return s != null && !s.isSleepFinish;
+    }
+
+    /**
+     * 选出「当前该信哪一段」：
+     *   1）有还没睡完的段（isSleepFinish=0）→ 优先（说明正在睡，不管文件新旧）；
+     *   2）否则取 bedTime 最新的一段（今晚的优先于前几天的）。
+     * 按 mtime 倒序扫前 12 个候选就够了（历史文件会越积越多，不必全解析）。
+     */
     private SleepSeg newestSleep() {
         File dir = fitnessDir();
         File[] files = dir.listFiles();
@@ -278,14 +310,17 @@ public final class SleepMonitor implements WearLink.Log {
         }
         if (cand.isEmpty()) return null;
         cand.sort((a, b) -> Long.compare(b.lastModified(), a.lastModified()));
-        for (int i = 0; i < Math.min(cand.size(), 4); i++) {
+        SleepSeg unfinished = null, latest = null;
+        for (int i = 0; i < Math.min(cand.size(), 12); i++) {
             SleepSeg s = parseAllDaySleep(cand.get(i));
-            if (s != null) return s;
+            if (s == null) continue;
+            if (!s.isSleepFinish) { unfinished = s; break; }
+            if (latest == null || s.bedTime > latest.bedTime) latest = s;
         }
-        return null;
+        return unfinished != null ? unfinished : latest;
     }
 
-    private SleepSeg parseAllDaySleep(File f) {
+    private static SleepSeg parseAllDaySleep(File f) {
         try {
             byte[] b = readAll(f);
             if (b == null || b.length < 9 + 12) return null;
@@ -369,6 +404,8 @@ public final class SleepMonitor implements WearLink.Log {
             o.put("bedTime", sp.getLong("bedTime", 0));
             o.put("wakeupTime", sp.getLong("wakeupTime", 0));
             o.put("detectedAt", sp.getLong("detectedAt", 0));
+            o.put("pauseMedia", sp.getBoolean("pause_media", true));
+            o.put("media", new JSONObject(MediaPause.statusJson(c)));
             return o.toString();
         } catch (Exception e) { return "{}"; }
     }

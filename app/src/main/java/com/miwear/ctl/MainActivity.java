@@ -170,6 +170,12 @@ public class MainActivity extends Activity implements WearLink.Log {
         rowS.addView(bSleepLog); rowS.addView(bSleepTest); rowS.addView(etSleepIv, lpIv);
         root.addView(rowS);
 
+        LinearLayout rowMedia = new LinearLayout(this);
+        Button bMediaPause = new Button(this); bMediaPause.setText("试停播放");
+        Button bMediaTog = new Button(this);  bMediaTog.setText("入睡停媒体：" + (SleepMonitor.pauseMedia(this) ? "开" : "关"));
+        rowMedia.addView(bMediaPause); rowMedia.addView(bMediaTog);
+        root.addView(rowMedia);
+
         // ───────── 日志（可翻页）─────────
         LinearLayout rowLog = new LinearLayout(this);
         rowLog.addView(label("日志"));
@@ -259,6 +265,17 @@ public class MainActivity extends Activity implements WearLink.Log {
                     "如果你看到这条通知，说明提醒通道通了。\n时间 " + new java.util.Date());
             log("已发测试通知");
         }));
+        bMediaPause.setOnClickListener(v -> bg(() -> {
+            boolean ok = MediaPause.ensureListener(this);
+            String r = MediaPause.pauseAllPlaying(this);
+            log("⏸ 试停播放（通知使用权 " + (ok ? "✓ 精准" : "✗ 走 root 盲发") + "）：" + r);
+        }));
+        bMediaTog.setOnClickListener(v -> {
+            boolean on = !SleepMonitor.pauseMedia(this);
+            SleepMonitor.setPauseMedia(this, on);
+            bMediaTog.setText("入睡停媒体：" + (on ? "开" : "关"));
+            log(on ? "✅ 入睡时会暂停正在播放的媒体" : "🛑 入睡时不再暂停媒体");
+        });
         bReadKey.setOnClickListener(v -> bg(() -> {
             try { readOfficialKey(); } catch (Exception e) { log("❌ 读官方 key 失败: " + e); }
         }));

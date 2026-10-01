@@ -1057,7 +1057,10 @@ public class WearLink {
     }
 
     /** module 8 sub 1/2：今日 / 历史 待同步 data id 列表 */
-    public List<FitId> fitnessIds(int sub) throws Exception {
+    public List<FitId> fitnessIds(int sub) throws Exception { return fitnessIds(sub, true); }
+
+    /** @param verbose false 时不逐条打日志（睡眠监测每几分钟轮询一次，别刷屏） */
+    public List<FitId> fitnessIds(int sub, boolean verbose) throws Exception {
         byte[] pt = request(oyt(8, sub, 0, null), 8000);
         List<FitId> out = new ArrayList<>();
         if (pt == null) { log.log("健身 id(8/" + sub + "): 无应答"); return out; }
@@ -1069,8 +1072,10 @@ public class WearLink {
         if (blob == null) { log.log("健身 id(8/" + sub + "): 应答里没有 id 列表"); return out; }
         for (int i = 0; i + 7 <= blob.length; i += 7)
             out.add(new FitId(java.util.Arrays.copyOfRange(blob, i, i + 7)));
-        log.log((sub == 1 ? "今日" : "历史") + "健身 data id（" + out.size() + " 条）:");
-        for (FitId id : out) log.log("  • " + id.describe());
+        if (verbose) {
+            log.log((sub == 1 ? "今日" : "历史") + "健身 data id（" + out.size() + " 条）:");
+            for (FitId id : out) log.log("  • " + id.describe());
+        }
         return out;
     }
 

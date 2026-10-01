@@ -29,8 +29,11 @@
 #   fitness [ids|history|pushed]  列今日 data id / 历史 id / 手表已推送并落盘的记录
 #   fitness fetch <id> [文件]   拉一条 data id 的原始数据（表 → 本机，ch5 传输；默认只读不确认）
 #   sleep [--save <文件>] [--json] [--watch [--interval 秒]]  看睡眠：判断「现在是否在睡」（--watch 常驻盯变化）
-#   sleep --daemon [--interval 秒]    开启睡眠监测（后台常驻，入睡/起床弹通知 + 记日志）
+#   sleep --daemon [--interval 秒]    开启睡眠监测（后台常驻，入睡/起床弹通知 + 入睡暂停听书 + 记日志）
 #   sleep --stop | --status | --log [-n 行数] [-f] | --test-notify | --reset
+#   sleep --test-pause               试一下「睡着暂停媒体」（现在就停，不用等入睡）
+#   sleep --pause-media on|off       入睡时要不要暂停正在播放的媒体（默认 on）
+#   sleep --grant                    授予通知使用权（精准控制媒体，root 一条命令）
 #   alert <标题> <内容>               本机弹一条通知（App 自己发，有横幅+声音）
 #   find                      找手表：让手表震动/响铃
 #   msg <包名> <文本>          给手表快应用发消息（interconnect）
@@ -497,6 +500,7 @@ if isinstance(d,str):
 print("  运行中: " + ("✓" if d.get("running") else "✗（miwear sleep --daemon 开启）"))
 print("  当前状态: " + ("😴 睡眠中" if d.get("state")=="asleep" else "清醒"))
 print("  轮询间隔: %ss" % d.get("interval", "?"))
+print("  入睡停媒体: " + ("开" if d.get("pauseMedia", True) else "关") + "　通知使用权: " + ("✓" if (d.get("media") or {}).get("listener") else "✗"))
 for k,label in (("bedTime","入睡时间"),("wakeupTime","起床时间"),("detectedAt","最近检测时间")):
     v=d.get(k) or 0
     if v: print("  %s: %s" % (label, time.strftime("%m-%d %H:%M:%S", time.localtime(v))))
@@ -525,9 +529,11 @@ print(d.get("data") or "")' 2>/dev/null)
 # 看睡眠：拉今日最新睡眠段（AllDaySleep）+ 最新打点，判断「现在是否在睡」
 #   miwear sleep [--save <文件>] [--json] [--watch] [--interval 秒]
 #   miwear sleep --daemon [--interval 秒] | --stop | --status | --log [-f] | --test-notify
+#                | --test-pause | --pause-media on|off | --grant
 cmd_sleep() {
   local save="" asjson=0 watch=0 interval=60
   local daemon=0 stop=0 status=0 dolog=0 testnotify=0 tailn=30 follow=0 reset=0
+  local testpause=0 grant=0 pausemedia=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --save) save=${2:-}; shift 2 ;;
@@ -538,6 +544,9 @@ cmd_sleep() {
       --status) status=1; shift ;;
       --log) dolog=1; shift ;;
       --test-notify) testnotify=1; shift ;;
+      --test-pause|--pause-test) testpause=1; shift ;;
+      --grant) grant=1; shift ;;
+      --pause-media|--stop-media) pausemedia=${2:-on}; shift 2 ;;
       --reset) reset=1; shift ;;
       -f|--follow) follow=1; shift ;;
       -n) tailn=${2:-30}; shift 2 ;;
@@ -549,6 +558,38 @@ cmd_sleep() {
     serve_up || die "需要常驻服务：miwear serve start"
     rpc_send '{"cmd":"sleepmon","action":"test"}' 20 >/dev/null || die "发送失败"
     ok "已发测试通知"
+    return 0
+  fi
+  if [ $grant -eq 1 ]; then
+    need_root
+    su -c "cmd notification allow_listener com.miwear.ctl/com.miwear.ctl.MediaListener" \
+      && ok "已授予通知使用权（miwear 媒体控制）" || warn "授权命令失败，可手动去设置里开"
+    return 0
+  fi
+  if [ -n "$pausemedia" ]; then
+    serve_up || die "需要常驻服务：miwear serve start"
+    case "$pausemedia" in
+      on|1|true|yes)  rpc_send '{"cmd":"sleepmon","action":"pauseon"}' 20 >/dev/null && ok "入睡时会暂停正在播放的媒体" ;;
+      off|0|false|no) rpc_send '{"cmd":"sleepmon","action":"pauseoff"}' 20 >/dev/null && ok "入睡时不再暂停媒体" ;;
+      *) die "用法: miwear sleep --pause-media on|off" ;;
+    esac
+    return 0
+  fi
+  if [ $testpause -eq 1 ]; then
+    serve_up || die "需要常驻服务：miwear serve start"
+    need_root
+    su -c "cmd notification allow_listener com.miwear.ctl/com.miwear.ctl.MediaListener" >/dev/null 2>&1
+    local r
+    r=$(rpc_send '{"cmd":"sleepmon","action":"testpause"}' 30 --raw 2>/dev/null | grep '"ev":"done"' | tail -1 \
+        | python3 -c 'import sys,json
+raw=sys.stdin.read().strip()
+try: d=json.loads(raw).get("data") or {}
+except Exception: d={}
+if isinstance(d,str):
+    try: d=json.loads(d)
+    except Exception: d={}
+print(("通知使用权: " + ("✓" if d.get("listener") else "✗ 走兜底")) + "\n" + str(d.get("result", "")))' 2>/dev/null)
+    [ -n "$r" ] && ok "$r" || warn "没拿到结果（miwear log -n 20 看看）"
     return 0
   fi
   if [ $stop -eq 1 ]; then sleepd_stop; return 0; fi

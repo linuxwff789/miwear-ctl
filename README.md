@@ -165,16 +165,28 @@ miwear alert <标题> <内容>             # 本机弹一条通知（App 自给�
 ### 睡眠监测（跑在 App 里，入睡/起床弹通知）
 
 ```bash
-miwear sleep --daemon [--interval 秒]   # 开启（默认 60s 一次）
-miwear sleep --status                   # 看状态（睡/醒 + 入睡、起床、检测时间）
-miwear sleep --log [-n N] [-f]          # 看事件日志（入睡/起床/新段）
+miwear sleep --daemon [--interval 秒]   # 开启（默认 60s 一次；入睡自动暂停正在播放的媒体）
+miwear sleep --status                   # 看状态（睡/醒 + 入睡、起床、检测时间 + 媒体控制是否就绪）
+miwear sleep --log [-n N] [-f]          # 看事件日志（入睡/起床/新段/暂停结果）
 miwear sleep --test-notify              # 试一下通知通道
+miwear sleep --test-pause               # 试一下「睡着暂停媒体」（现在立刻停，不用等入睡）
+miwear sleep --pause-media on|off       # 入睡时要不要暂停正在播放的媒体（默认 on）
+miwear sleep --grant                    # 授予通知使用权（精准控制媒体；root 一条命令）
 miwear sleep --reset                    # 清空状态/日志（消掉误判，状态机回到清醒）
 miwear sleep --stop                     # 关闭
 ```
 
+**睡着自动停听书/音乐**（`MediaPause.java` + 空的通知使用权服务 `MediaListener.java`）：
+
+- 判到「入睡」（手表 AllDaySleep `isSleepFinish=0`）→ 枚举所有媒体会话，**只对真正在播放的**
+  调 `pause()`（精准，不会误伤别的 app；列表、结果都写进 `miwear sleep --log`）。
+- 授权（免手动点设置）：`miwear sleep --grant`，或
+  `su -c "cmd notification allow_listener com.miwear.ctl/com.miwear.ctl.MediaListener"`；
+  没授权时兜底用 root 盲发一次媒体键（可能打偏，日志会标明「走兜底」）。
+- 起床**不会**自动恢复播放（想继续自己点）；可用 `--pause-media off` 整个关掉。
+
 > 监测**在 App 内常驻**（`SleepMonitor.java` + 前台服务），Termux 只负责开关和看日志；关掉 Termux 也照跑。
-> 也可以在 App 界面直接点「开启监测 / 关闭 / 状态 / 看日志 / 测试通知」。已开启则开机自启。
+> 也可以在 App 界面直接点「开启监测 / 关闭 / 状态 / 看日志 / 测试通知」（还有「试停播放」/「入睡停媒体：开|关」）。已开启则开机自启。
 
 **常驻通知会跟着状态走**（`GatewayService.showForeground / refresh`）：
 
@@ -191,12 +203,14 @@ miwear sleep --stop                     # 关闭
 > `miwear log --all | grep '\[服务\]'`（每次启停都写了决策依据），
 > `miwear sleep --log` 里也会记「🛑 睡眠监测已停止（触发：…）」。
 
-开启后行为（`tools/sleep_monitor.py`）：
+开启后行为（`SleepMonitor.java`，App 内）：
 
 1. 每 `interval` 秒看一遍 App 已落盘的睡眠段（`files/fitness/*.bin`），以**最新那一段**为准：
-   - `isSleepFinish = 0` ⇒ 正在睡；
-   - `isSleepFinish = 1` ⇒ 已醒。
-2. **状态机 awake ↔ asleep**（持久化在 `~/.miwear-sleep/state.json`，重启不会重复报）：
+   - `isSleepFinish = 0` ⇒ 正在睡（优先采信，不管文件新旧）；
+   - 否则取 `bedTime` 最新的一段，`isSleepFinish = 1` ⇒ 已醒。
+2. 每 5 个周期主动向手表要一次睡眠记录（`CmdServer.pullSleepRecords`，`confirm=false` 不删表上记录）：
+   本地缺的、或还是「没睡完」的会被拉下来（每轮最多 2 条）——不靠手表自发推送。
+3. **状态机 awake ↔ asleep**（持久化在 SharedPreferences，重启不会重复报）：
 
 ```
 [2026-09-25 23:59:41] 😴 入睡  bedTime=09-25 23:54:09  detected=09-25 23:59:41  id=2199b66a200421
