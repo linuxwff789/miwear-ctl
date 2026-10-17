@@ -1448,15 +1448,10 @@ public class WearLink {
         }
 
         // ① MassPrepare
-        //    对齐官方 ThirdAppDebugFragment.sendRpkFile() 的链路：
-        //      sendFile(did, type=4, ?, path, segmentLength, listener, 0x40, 0)
-        //        → prepareMass(did, dataType=4, md5, p4=total, p5=0x40)
-        //    即 dataType 是 4（不是 64），64 是 iqg.f4。
         java.io.ByteArrayOutputStream iqg = new java.io.ByteArrayOutputStream();
-        iqg.write(0x08); PB.varint(iqg, 4);             // f1 = dataType = 4
+        iqg.write(0x08); PB.varint(iqg, 64);            // f1 = dataType = 64
         PB.bytes(iqg, 2, md5);                          // f2 = md5
         iqg.write(0x18); PB.varint(iqg, total);         // f3 = 文件长度
-        iqg.write(0x20); PB.varint(iqg, 64);            // f4 = 64
 
         java.io.ByteArrayOutputStream eqg = new java.io.ByteArrayOutputStream();
         PB.bytes(eqg, 1, iqg.toByteArray());            // eqg.f1 = iqg
@@ -1485,37 +1480,22 @@ public class WearLink {
         }
 
         // ② 分片发送（MASS 通道，明文）
-        //    格式（逆向 MassDataComposer.onDataReceived/onSinglePacketReceived）：
-        //      [total u16 LE][seq u16 LE]                 ← 总片数 / 当前片序号(1-based)
-        //      首片额外: [dataType=0x05][encrypt=0x00][dataId 16B=md5][dataLength u32 LE]
-        //      数据
-        //      末片尾部: [CRC32 u32 LE]（对“数据”段算，官方 CRCUtil.CRC32 标准 CRC-32）
-        //   接收侧：数据长度 = 包长 - 26(头) - 4(CRC)。
         final int SEG = 16384;
-        final int nSeg = Math.max(1, (total + SEG - 1) / SEG);
         int off = 0, idx = 0;
         while (off < total) {
             idx++;
             int n = Math.min(SEG, total - off);
-            byte[] chunk = java.util.Arrays.copyOfRange(rpk, off, off + n);
             java.io.ByteArrayOutputStream seg = new java.io.ByteArrayOutputStream();
-            seg.write(nSeg & 0xFF); seg.write((nSeg >> 8) & 0xFF);   // 总片数 LE
-            seg.write(idx & 0xFF);  seg.write((idx >> 8) & 0xFF);    // 片序号 LE
-            if (idx == 1) {                                          // 仅首片带 22B 头
-                seg.write(0x05);                                   // dataType
-                seg.write(0x00);                                   // encrypt
-                seg.write(md5, 0, 16);                             // dataId
+            seg.write(0x05); seg.write(0x00);
+            seg.write(idx & 0xFF); seg.write((idx >> 8) & 0xFF);   // 片序号 LE
+            if (idx == 1) {                                        // 仅首片带 22B 头
+                seg.write(0x00);
+                seg.write(0x40);                                   // s = 64
+                seg.write(md5, 0, 16);
                 seg.write(total & 0xFF); seg.write((total >> 8) & 0xFF);
                 seg.write((total >> 16) & 0xFF); seg.write((total >> 24) & 0xFF);
             }
-            seg.write(chunk, 0, n);
-            if (idx == nSeg) {                                       // 末片尾部：CRC32
-                java.util.zip.CRC32 c = new java.util.zip.CRC32();
-                c.update(chunk);
-                long v = c.getValue();
-                seg.write((int) (v & 0xFF)); seg.write((int) ((v >> 8) & 0xFF));
-                seg.write((int) ((v >> 16) & 0xFF)); seg.write((int) ((v >> 24) & 0xFF));
-            }
+            seg.write(rpk, off, n);
             sendData(Framing.CH_MASS, Framing.OP_WRITE, seg.toByteArray());
             off += n;
             log.log("  片 " + idx + " 已发 (" + n + "B)");
