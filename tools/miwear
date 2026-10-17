@@ -212,7 +212,7 @@ cmd_install() {
 
   # 常驻服务在跑 → 直接 socket 安装（不用重启 App、不用 am start）
   if serve_up; then
-    if rpc_send "$(okjson cmd=install path="$dst")" 300; then
+    if rpc_send "$(okjson cmd=install path="$dst" ${MIWEAR_INSTALL_OPTS:+opts="$MIWEAR_INSTALL_OPTS"})" 300; then
       echo
       ok "已发送完成。${D}设备对安装只回 L1 ACK，看下手表即可${N}"
       return 0

@@ -1405,7 +1405,19 @@ public class WearLink {
      *  ③ 设备自动解包安装到 /data/quickapp/<包名>/
      */
     public void installRpk(byte[] rpk, String dataId) throws Exception {
+        installRpk(rpk, dataId, null);
+    }
+
+    /** opts 可含 dt/enc/massEnc/plainHL/ch，用于对比实验 */
+    public void installRpk(byte[] rpk, String dataId, org.json.JSONObject opts) throws Exception {
         if (keys == null) throw new IllegalStateException("未认证");
+        final int optDt   = opts == null ? 0x40 : opts.optInt("dt", 0x40);
+        final int optEnc  = opts == null ? 0    : opts.optInt("enc", 0);
+        final boolean optMassEnc = opts != null && opts.optBoolean("massEnc", false);
+        final boolean optPlainHL = opts != null && opts.optBoolean("plainHL", false);
+        final int optCh   = opts == null ? 2    : opts.optInt("ch", 2);
+        log.log("安装参数 dt=0x" + Integer.toHexString(optDt) + " enc=" + optEnc
+                + " massEnc=" + optMassEnc + " plainHL=" + optPlainHL + " ch=" + optCh);
 
         java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
         byte[] md5 = md.digest(rpk);
@@ -1496,8 +1508,8 @@ public class WearLink {
             seg.write(nSeg & 0xFF); seg.write((nSeg >> 8) & 0xFF);   // 总片数 LE
             seg.write(idx & 0xFF);  seg.write((idx >> 8) & 0xFF);    // 片序号 LE(1-based)
             if (idx == 1) {                                          // 仅首片带 22B Header
-                seg.write(0x40);                                   // dataType = (type<<4)|subtype = (4<<4)|0
-                seg.write(0x00);                                   // encrypt
+                if (optPlainHL) { seg.write(optEnc); seg.write(optDt); }
+                else            { seg.write(optDt);  seg.write(optEnc); }
                 seg.write(md5, 0, 16);                             // dataId
                 seg.write(total & 0xFF); seg.write((total >> 8) & 0xFF);
                 seg.write((total >> 16) & 0xFF); seg.write((total >> 24) & 0xFF);
@@ -1510,9 +1522,13 @@ public class WearLink {
                 seg.write((int) (v & 0xFF)); seg.write((int) ((v >> 8) & 0xFF));
                 seg.write((int) ((v >> 16) & 0xFF)); seg.write((int) ((v >> 24) & 0xFF));
             }
-            // 实验：两个通道都发一遍，看哪个能让手表有反应
-            try { sendData(Framing.CH_MASS, Framing.OP_WRITE, seg.toByteArray()); } catch (Exception ignored) {}
-            sendEncrypted(Framing.CH_PB, seg.toByteArray());
+            byte[] out = seg.toByteArray();
+            if (optMassEnc) {
+                byte[] e2 = Crypto.ctr(keys.appKey, out);
+                if (e2 != null) out = e2;
+            }
+            if (optCh == 1) sendEncrypted(Framing.CH_PB, out);
+            else            sendData(Framing.CH_MASS, Framing.OP_WRITE, out);
             off += n;
             log.log("  片 " + idx + " 已发 (" + n + "B)");
             // 收帧并 ACK（关键！）

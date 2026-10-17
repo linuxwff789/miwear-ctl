@@ -486,7 +486,11 @@ public class CmdServer implements WearLink.Log {
                         }
                     }
                     log("读取 rpk: " + path + " (" + data.length + " 字节)");
-                    ensureLink().installRpk(data, f.getName());
+                    org.json.JSONObject iopts = null;
+                    String optsStr = j.optString("opts", "");
+                    if (!optsStr.isEmpty()) { try { iopts = new org.json.JSONObject(optsStr); } catch (Exception e) { log("opts 解析失败: " + e); } }
+                    else if (j.has("dt") || j.has("enc") || j.has("massEnc") || j.has("ch")) iopts = j;
+                    ensureLink().installRpk(data, f.getName(), iopts);
                     return null;
                 }
                 case "apps": {
