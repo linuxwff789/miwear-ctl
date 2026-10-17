@@ -1480,22 +1480,36 @@ public class WearLink {
         }
 
         // ② 分片发送（MASS 通道，明文）
+        //    格式（逆向 MassDataDispatcher.a.splitData / MassDataComposer.onDataReceived）：
+        //      每片: [total u16 LE][seq u16 LE] + 数据
+        //      首片额外（在 4B 头之后）: [dataType 1B][encrypt 1B][dataId 16B=md5][dataLength u32 LE]
+        //      末片尾部: CRC32 u32 LE
+        //    total = 总片数；seq/total 相等且 total==1 → 手表走“单包”路径。
         final int SEG = 16384;
+        final int nSeg = Math.max(1, (total + SEG - 1) / SEG);
         int off = 0, idx = 0;
         while (off < total) {
             idx++;
             int n = Math.min(SEG, total - off);
+            byte[] chunk = java.util.Arrays.copyOfRange(rpk, off, off + n);
             java.io.ByteArrayOutputStream seg = new java.io.ByteArrayOutputStream();
-            seg.write(0x05); seg.write(0x00);
-            seg.write(idx & 0xFF); seg.write((idx >> 8) & 0xFF);   // 片序号 LE
-            if (idx == 1) {                                        // 仅首片带 22B 头
-                seg.write(0x00);
-                seg.write(0x40);                                   // s = 64
-                seg.write(md5, 0, 16);
+            seg.write(nSeg & 0xFF); seg.write((nSeg >> 8) & 0xFF);   // 总片数 LE
+            seg.write(idx & 0xFF);  seg.write((idx >> 8) & 0xFF);    // 片序号 LE(1-based)
+            if (idx == 1) {                                          // 仅首片带 22B Header
+                seg.write(0x04);                                   // dataType（官方 rpk 用 4）
+                seg.write(0x00);                                   // encrypt
+                seg.write(md5, 0, 16);                             // dataId
                 seg.write(total & 0xFF); seg.write((total >> 8) & 0xFF);
                 seg.write((total >> 16) & 0xFF); seg.write((total >> 24) & 0xFF);
             }
-            seg.write(rpk, off, n);
+            seg.write(chunk, 0, n);
+            if (idx == nSeg) {                                       // 末片尾部：CRC32
+                java.util.zip.CRC32 c = new java.util.zip.CRC32();
+                c.update(chunk);
+                long v = c.getValue();
+                seg.write((int) (v & 0xFF)); seg.write((int) ((v >> 8) & 0xFF));
+                seg.write((int) ((v >> 16) & 0xFF)); seg.write((int) ((v >> 24) & 0xFF));
+            }
             sendData(Framing.CH_MASS, Framing.OP_WRITE, seg.toByteArray());
             off += n;
             log.log("  片 " + idx + " 已发 (" + n + "B)");

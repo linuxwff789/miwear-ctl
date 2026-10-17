@@ -1,21 +1,44 @@
 {
-  "package": "com.miwear.demo",
-  "name": "MiWearDemo",
-  "versionName": "1.4.0",
-  "versionCode": 5,
+  "package": "com.miwear.books",
+  "name": "WatchBooks",
+  "versionName": "0.3.1",
+  "versionCode": 34,
   "minPlatformVersion": 1000,
   "icon": "/common/logo.png",
-  "deviceTypeList": ["watch"],
+  "deviceTypeList": [
+    "watch"
+  ],
   "features": [
-    { "name": "system.router" },
-    { "name": "system.vibrator" },
-    { "name": "system.prompt" },
-    { "name": "system.device" },
-    { "name": "system.storage" },
-    { "name": "system.brightness" },
-    { "name": "system.fetch" },
-    { "name": "system.network" },
-    { "name": "system.interconnect" }
+    {
+      "name": "system.router"
+    },
+    {
+      "name": "system.vibrator"
+    },
+    {
+      "name": "system.prompt"
+    },
+    {
+      "name": "system.device"
+    },
+    {
+      "name": "system.storage"
+    },
+    {
+      "name": "system.brightness"
+    },
+    {
+      "name": "system.fetch"
+    },
+    {
+      "name": "system.network"
+    },
+    {
+      "name": "system.interconnect"
+    },
+    {
+      "name": "system.file"
+    }
   ],
   "config": {
     "logLevel": "log",
@@ -24,8 +47,9 @@
   "router": {
     "entry": "pages/index",
     "pages": {
-      "pages/index": { "component": "index" },
-      "pages/net": { "component": "index" }
+      "pages/index": {
+        "component": "index"
+      }
     }
   }
 }

@@ -1,201 +1,176 @@
 <template>
   <div class="page">
-    <div class="card">
-      <text class="title">MiWear Demo</text>
-      <text class="sub">{{ subtitle }}</text>
+    <div class="hd">
+      <text class="ttl">我的书架</text>
+      <div class="sync" @click="onSync"><text class="sync-t">{{ syncLabel }}</text></div>
     </div>
-
-    <div class="card">
-      <text class="line">手机消息：{{ msg }}</text>
-    </div>
-
-    <div class="card center">
-      <text class="counter">{{ count }}</text>
-      <text class="hint">点击下面按钮 +1 并震动</text>
-    </div>
-
-    <div class="row">
-      <div class="btn primary" @click="onTap">
-        <text class="btn-text">+1 震动</text>
+    <div class="list">
+      <div class="empty" if="{{ books.length == 0 }}">
+        <text class="empty-t">{{ emptyText }}</text>
       </div>
-      <div class="btn" @click="onReset">
-        <text class="btn-text">重置</text>
+      <div class="item" for="{{ (i, b) in books }}" @click="openBook(i)">
+        <text class="it">{{ b.name }}</text>
+        <text class="is">{{ b.sizeText }}</text>
       </div>
     </div>
-
-    <div class="row">
-      <div class="btn" @click="onBright">
-        <text class="btn-text">调亮度</text>
-      </div>
-      <div class="btn" @click="onInfo">
-        <text class="btn-text">设备信息</text>
-      </div>
-    </div>
-
-    <div class="row">
-      <div class="btn primary" @click="onNet">
-        <text class="btn-text">联网测试</text>
-      </div>
+    <div class="ft">
+      <text class="st">{{ status }}</text>
     </div>
   </div>
 </template>
-
 <script>
-import vibrator from '@system.vibrator'
-import brightness from '@system.brightness'
-import device from '@system.device'
-import prompt from '@system.prompt'
+import fetch from '@system.fetch'
+import storage from '@system.storage'
 import router from '@system.router'
-import interconnect from '@system.interconnect'
+import prompt from '@system.prompt'
+
+const SRV = 'http://10.1.10.1:8787'
 
 export default {
   data: {
-    count: 0,
-    subtitle: '自制快应用 · 直连安装',
-    bright: 0,
-    msg: '（等待手机发消息）'
+    books: [],
+    status: '',
+    syncLabel: '同步',
+    emptyText: '还没有书。点右上角「同步」从手机拉取。',
+    syncing: false
   },
 
-  onInit() {
-    console.log('[page] onInit')
+  onShow () { this.loadShelf() },
+
+  onInit () {
+    this.loadShelf()
+    // 自检：把环境与网络情况回传给手机端，方便无屏调试
+    const s = this
+    setTimeout(function () { s.selfTest() }, 500)
+  },
+
+  report (obj) {
     try {
-      const conn = interconnect.instance()
-      this.conn = conn
-      conn.onmessage = (data) => {
-        console.log('[interconnect] ' + data.data)
-        this.msg = String(data.data)
-        try { vibrator.vibrate({ mode: 'short' }) } catch (e) {}
+      fetch.fetch({
+        url: SRV + '/api/report', method: 'POST',
+        header: { 'Content-Type': 'application/json' },
+        data: JSON.stringify(obj),
+        success: function () {}, fail: function () {}
+      })
+    } catch (e) {}
+  },
+
+  selfTest () {
+    const s = this
+    const R = { tag: 'index', ts: Date.now(), steps: [] }
+    const step = function (k, v) { R.steps.push([k, String(v)]); console.log('[t] ' + k + ' = ' + v) }
+    this.status = '连接手机…'
+    fetch.fetch({
+      url: SRV + '/api/ping', method: 'GET',
+      success: function (res) {
+        step('ping', res.code + ' ' + String(res.data).slice(0, 80))
+        s.status = '手机已连接'
+        s.checkStorage(step, R)
+      },
+      fail: function (d, c) {
+        step('ping', 'FAIL ' + d + '/' + c)
+        s.status = '连不上手机（' + c + '）'
+        s.report(R)
       }
-    } catch (e) {
-      console.log('interconnect failed: ' + e)
-      this.msg = '(interconnect 不可用)'
+    })
+  },
+
+  checkStorage (step, R) {
+    const s = this
+    storage.set({
+      key: 'probe', value: new Array(1025).join('x'),
+      success: function () {
+        storage.get({ key: 'probe', success: function (d) {
+          step('storage4k', 'ok len=' + ((d && d.value) ? d.value.length : -1))
+          s.report(R); s.status = '就绪（存储可用）'
+        }, fail: function (d, c) { step('storage4k_get', 'FAIL ' + d + '/' + c); s.report(R) } })
+      },
+      fail: function (d, c) { step('storage4k_set', 'FAIL ' + d + '/' + c); s.report(R) }
+    })
+  },
+
+  loadShelf () {
+    const s = this
+    storage.get({ key: 'bookshelf', success: function (d) {
+      try { s.books = d && d.value ? JSON.parse(d.value) : [] } catch (e) { s.books = [] }
+    }, fail: function () { s.books = [] } })
+  },
+
+  onSync () {
+    if (this.syncing) return
+    const s = this
+    this.syncing = true
+    this.syncLabel = '...'
+    this.status = '正在拉取书单…'
+    fetch.fetch({
+      url: SRV + '/api/books', method: 'GET',
+      success: function (res) {
+        let list = []
+        try { list = JSON.parse(res.data).books || [] } catch (e) { s.status = '书单解析失败'; s.reset(); return }
+        s.status = '书单 ' + list.length + ' 本'
+        s.downloadAll(list, 0, [], s)
+      },
+      fail: function (d, c) { s.status = '拉取失败 ' + c; s.reset() }
+    })
+  },
+
+  // 依次把每本书正文拉到手表本地存储（按 32KB 分块）
+  downloadAll (list, idx, done, s) {
+    if (idx >= list.length) {
+      storage.set({ key: 'bookshelf', value: JSON.stringify(done), success: function () {
+        s.books = done; s.status = '同步完成：' + done.length + ' 本'; s.reset()
+      }, fail: function () { s.status = '书架写入失败'; s.reset() } })
+      return
     }
+    const b = list[idx]
+    s.status = '下载《' + b.name + '》…'
+    fetch.fetch({
+      url: SRV + '/api/book/' + encodeURIComponent(b.id), method: 'GET',
+      success: function (res) {
+        const text = String(res.data)
+        const CH = 32768
+        const n = Math.max(1, Math.ceil(text.length / CH))
+        const parts = []
+        for (let i = 0; i < n; i++) parts.push(text.substr(i * CH, CH))
+        s.saveChunks(b, parts, 0, function () {
+          done.push({ id: b.id, name: b.name, size: b.size, sizeText: (b.size/1024).toFixed(0) + 'KB', pages: Math.max(1, Math.ceil(text.length / 240)) })
+          s.downloadAll(list, idx + 1, done, s)
+        })
+      },
+      fail: function (d, c) { s.status = '下载失败 ' + c; s.reset() }
+    })
   },
 
-  onReady() {
-    console.log('[page] onReady')
-    try {
-      const info = device.getInfoSync ? device.getInfoSync() : {}
-      this.subtitle = (info.brand || 'Vela') + ' ' + (info.model || 'Watch')
-    } catch (e) {
-      console.log('getInfo failed: ' + e)
-    }
+  saveChunks (b, parts, i, cb) {
+    const s = this
+    if (i >= parts.length) { cb(); return }
+    storage.set({
+      key: 'book:' + b.id + ':' + i, value: parts[i],
+      success: function () { s.saveChunks(b, parts, i + 1, cb) },
+      fail: function (d, c) { s.status = '存储失败 ' + c; s.reset() }
+    })
   },
 
-  onTap() {
-    this.count = this.count + 1
-    try {
-      vibrator.vibrate({ mode: 'long' })
-    } catch (e) {
-      console.log('vibrate failed: ' + e)
-    }
-  },
+  reset () { this.syncing = false; this.syncLabel = '同步' },
 
-  onReset() {
-    this.count = 0
-  },
-
-  onNet() {
-    router.push({ uri: 'pages/net' })
-  },
-
-  onBright() {
-    // 0..255 循环
-    this.bright = this.bright >= 200 ? 40 : this.bright + 60
-    try {
-      brightness.setValue({ value: this.bright })
-      prompt.showToast({ message: '亮度 ' + this.bright })
-    } catch (e) {
-      console.log('brightness failed: ' + e)
-    }
-  },
-
-  onInfo() {
-    let s = ''
-    try {
-      const info = device.getInfoSync ? device.getInfoSync() : {}
-      s = JSON.stringify(info)
-    } catch (e) {
-      s = '读取失败'
-    }
-    console.log('[device] ' + s)
-    prompt.showToast({ message: s.slice(0, 80) })
+  openBook (i) {
+    storage.set({ key: 'curBook', value: String(i) })
+    router.push({ uri: 'pages/read' })
   }
 }
 </script>
-
 <style>
-.page {
-  flex-direction: column;
-  width: 480px;
-  height: 480px;
-  padding: 16px;
-  background-color: #000000;
-}
-
-.card {
-  flex-direction: column;
-  padding: 14px;
-  margin-bottom: 12px;
-  border-radius: 12px;
-  background-color: #1c1c1e;
-}
-
-.center {
-  align-items: center;
-  justify-content: center;
-}
-
-.title {
-  font-size: 34px;
-  color: #ffffff;
-  font-weight: bold;
-}
-
-.sub {
-  font-size: 20px;
-  color: #8e8e93;
-  margin-top: 6px;
-}
-
-.line {
-  font-size: 22px;
-  color: #ffa626;
-}
-
-.counter {
-  font-size: 72px;
-  color: #ffa626;
-  font-weight: bold;
-}
-
-.hint {
-  font-size: 18px;
-  color: #8e8e93;
-}
-
-.row {
-  flex-direction: row;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-
-.btn {
-  flex: 1;
-  height: 76px;
-  margin: 0 6px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 14px;
-  background-color: #2c2c2e;
-}
-
-.primary {
-  background-color: #ffa626;
-}
-
-.btn-text {
-  font-size: 24px;
-  color: #ffffff;
-}
+.page { flex-direction: column; width: 480px; height: 480px; padding: 12px; background-color: #000000; }
+.hd { flex-direction: row; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.ttl { font-size: 26px; color: #ffffff; font-weight: bold; }
+.sync { padding: 8px 18px; border-radius: 10px; background-color: #ffa626; }
+.sync-t { font-size: 18px; color: #000000; }
+.list { flex: 1; flex-direction: column; }
+.empty { flex: 1; align-items: center; justify-content: center; padding: 20px; }
+.empty-t { font-size: 17px; color: #8e8e93; }
+.item { flex-direction: row; align-items: center; justify-content: space-between; padding: 12px; margin-bottom: 8px; border-radius: 10px; background-color: #1c1c1e; }
+.it { font-size: 20px; color: #ffffff; }
+.is { font-size: 14px; color: #8e8e93; }
+.ft { padding-top: 6px; }
+.st { font-size: 14px; color: #6e6e73; }
 </style>
