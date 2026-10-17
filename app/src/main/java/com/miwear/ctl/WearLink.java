@@ -1497,7 +1497,7 @@ public class WearLink {
         //      首片额外（在 4B 头之后）: [dataType 1B][encrypt 1B][dataId 16B=md5][dataLength u32 LE]
         //      末片尾部: CRC32 u32 LE
         //    total = 总片数；seq/total 相等且 total==1 → 手表走“单包”路径。
-        final int SEG = 16384;
+        final int SEG = (opts != null && opts.optInt("seg", 0) > 0) ? opts.optInt("seg", 0) : 16384;
         final int nSeg = Math.max(1, (total + SEG - 1) / SEG);
         int off = 0, idx = 0;
         while (off < total) {
