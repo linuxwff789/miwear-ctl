@@ -1510,8 +1510,9 @@ public class WearLink {
                 seg.write((int) (v & 0xFF)); seg.write((int) ((v >> 8) & 0xFF));
                 seg.write((int) ((v >> 16) & 0xFF)); seg.write((int) ((v >> 24) & 0xFF));
             }
-            // 历史可行路径：ch2 明文（v9~v12 曾成功）。若失败再试 ch1+加密（官方路径）。
-            sendData(Framing.CH_MASS, Framing.OP_WRITE, seg.toByteArray());
+            // 实验：两个通道都发一遍，看哪个能让手表有反应
+            try { sendData(Framing.CH_MASS, Framing.OP_WRITE, seg.toByteArray()); } catch (Exception ignored) {}
+            sendEncrypted(Framing.CH_PB, seg.toByteArray());
             off += n;
             log.log("  片 " + idx + " 已发 (" + n + "B)");
             // 收帧并 ACK（关键！）
