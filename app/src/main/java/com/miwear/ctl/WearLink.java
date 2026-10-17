@@ -1496,7 +1496,7 @@ public class WearLink {
             seg.write(nSeg & 0xFF); seg.write((nSeg >> 8) & 0xFF);   // 总片数 LE
             seg.write(idx & 0xFF);  seg.write((idx >> 8) & 0xFF);    // 片序号 LE(1-based)
             if (idx == 1) {                                          // 仅首片带 22B Header
-                seg.write(0x04);                                   // dataType（官方 rpk 用 4）
+                seg.write(0x40);                                   // dataType = (type<<4)|subtype = (4<<4)|0
                 seg.write(0x00);                                   // encrypt
                 seg.write(md5, 0, 16);                             // dataId
                 seg.write(total & 0xFF); seg.write((total >> 8) & 0xFF);
